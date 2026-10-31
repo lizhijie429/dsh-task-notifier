@@ -1,0 +1,176 @@
+/**
+ * dsh-task-notifier — a DSH Host plugin that:
+ *
+ * 1. monitors live agent turns (start / steps / end) from the durable
+ *    `session/event` feed,
+ * 2. reports turn outcomes through OS notifications (Windows toast,
+ *    macOS notification center, Linux notify-send), and
+ * 3. re-submits a continuation prompt when a turn failed because the model
+ *    request retry budget was exhausted (`llm/retry` events reached
+ *    `maxRetries` and the loop closed the turn with `reason.kind === 'error'`).
+ *
+ * The plugin is host-only and has no dependencies beyond Node built-ins, so it
+ * can be mounted from a profile patch by absolute path without a build step.
+ *
+ * @module dsh-task-notifier
+ */
+
+import { fileURLToPath } from 'node:url'
+import { normalizeConfig } from './lib/config.mjs'
+import { createFileLog } from './lib/file-log.mjs'
+import { createNotifier, resolveChannel } from './lib/notify.mjs'
+import { TaskObserver } from './lib/observer.mjs'
+import { registerWindowsAppId, resolveWindowsIconPath } from './lib/win-appid.mjs'
+
+/** Cordis plugin name. */
+export const name = 'task-notifier'
+
+/** The live Agent registry is the only service the plugin reads. */
+export const inject = ['agents']
+
+const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
+
+/**
+ * Mount the turn observer.
+ * @param {any} ctx - Cordis context of the profile/host plugin tree.
+ * @param {unknown} rawConfig - the `config:` block of the loader entry.
+ */
+export function apply(ctx, rawConfig) {
+  const logger = resolveLogger(ctx)
+  const log = (level, message) => {
+    try {
+      const method = logger && typeof logger[level] === 'function' ? logger[level] : logger?.info
+      method?.call(logger, `[task-notifier] ${message}`)
+    } catch {
+      // Logging is best effort; the observer must keep working.
+    }
+  }
+
+  const { config, warnings } = normalizeConfig(rawConfig, PLUGIN_DIR)
+  for (const warning of warnings) log('warn', `config: ${warning}`)
+
+  const fileLog = createFileLog({ config, logger: { warn: (message) => log('warn', message) } })
+
+  // Brand Windows toasts as DSH instead of "Windows PowerShell": register an
+  // AUMID under HKCU (best effort) and pass it to the toast helper. When the
+  // registration fails the helper keeps PowerShell's registered identity, so a
+  // notification still appears, just with the generic name/icon.
+  const windowsIconPath = resolveWindowsIconPath(PLUGIN_DIR)
+  const windowsChannel = resolveChannel(config.channel, process.platform) === 'windows'
+  const windowsRegistration = windowsChannel
+    ? registerWindowsAppId({
+        appId: config.windowsAppId,
+        displayName: config.windowsAppName,
+        iconPath: windowsIconPath,
+        log,
+        fileLog,
+      })
+    : { ok: false, skipped: 'channel' }
+
+  const notifier = createNotifier({
+    config,
+    log,
+    fileLog,
+    windowsAppId: windowsRegistration.ok ? config.windowsAppId : undefined,
+    windowsIconPath,
+  })
+  const agents = (() => {
+    try {
+      return ctx.agents ?? ctx.get?.('agents')
+    } catch {
+      return undefined
+    }
+  })()
+
+  const observer = new TaskObserver({ config, log, fileLog, notifier, agents })
+
+  fileLog('plugin.mounted', {
+    pid: process.pid,
+    node: process.version,
+    platform: process.platform,
+    channel: notifier.channel,
+    windows: {
+      appId: config.windowsAppId,
+      registered: windowsRegistration.ok,
+      ...(windowsRegistration.skipped ? { skipped: windowsRegistration.skipped } : {}),
+      ...(windowsRegistration.detail ? { detail: String(windowsRegistration.detail).slice(0, 300) } : {}),
+      iconPath: windowsIconPath ?? null,
+    },
+    config: sanitizedConfig(config),
+  })
+  log(
+    'info',
+    `mounted (channel=${notifier.channel}, autoContinue=${config.autoContinue.enabled ? `on/${config.autoContinue.maxAttempts}` : 'off'})`,
+  )
+
+  ctx.effect(() => {
+    const offSession = ctx.on('session/event', (session, event) => {
+      try {
+        observer.onSessionEvent(session, event)
+      } catch (error) {
+        log('warn', `session event handler failed: ${String(error?.message ?? error)}`)
+        fileLog('observer.error', { event: event?.type, reason: String(error?.message ?? error) })
+      }
+    })
+    const offStatus = ctx.on('agent/status', (payload) => {
+      try {
+        observer.onAgentStatus(payload)
+      } catch (error) {
+        log('warn', `agent status handler failed: ${String(error?.message ?? error)}`)
+      }
+    })
+    const offDisposed = ctx.on('session/disposed', (session) => {
+      try {
+        observer.onSessionDisposed(session)
+      } catch (error) {
+        log('warn', `session disposal handler failed: ${String(error?.message ?? error)}`)
+      }
+    })
+    return () => {
+      offSession?.()
+      offStatus?.()
+      offDisposed?.()
+      observer.dispose()
+      fileLog('plugin.unmounted', { pid: process.pid })
+    }
+  }, 'task-notifier.lifecycle()')
+}
+
+/**
+ * Resolve a named Cordis logger, falling back to the console.
+ * @param {any} ctx
+ * @returns {any}
+ */
+function resolveLogger(ctx) {
+  try {
+    if (typeof ctx?.logger === 'function') {
+      const named = ctx.logger('task-notifier')
+      if (named && typeof named.info === 'function') return named
+    }
+    if (ctx?.logger && typeof ctx.logger.info === 'function') return ctx.logger
+  } catch {
+    // Fall through to console.
+  }
+  return console
+}
+
+/**
+ * Keep the mount log readable and free of secrets.
+ * @param {any} config
+ */
+function sanitizedConfig(config) {
+  return {
+    notifyOnStart: config.notifyOnStart,
+    notifyOnComplete: config.notifyOnComplete,
+    notifyOnError: config.notifyOnError,
+    notifyOnAbort: config.notifyOnAbort,
+    notifyOnStep: config.notifyOnStep,
+    notifySubagents: config.notifySubagents,
+    channel: config.channel,
+    windowsAppId: config.windowsAppId,
+    windowsAppName: config.windowsAppName,
+    autoContinue: {
+      ...config.autoContinue,
+    },
+  }
+}

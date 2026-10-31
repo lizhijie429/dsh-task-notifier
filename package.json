@@ -1,0 +1,51 @@
+{
+  "name": "@lizhijie429/dsh-task-notifier",
+  "version": "0.1.0",
+  "description": "DSH Host plugin: monitor agent turn status, send OS notifications (Windows toasts branded with the DSH icon), and auto-continue after exhausted model-request retries.",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "lib",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-0 <0.3.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "notification",
+    "toast",
+    "auto-continue"
+  ],
+  "license": "MIT",
+  "author": "lizhijie429",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lizhijie429/dsh-task-notifier.git"
+  },
+  "homepage": "https://github.com/lizhijie429/dsh-task-notifier#readme",
+  "bugs": {
+    "url": "https://github.com/lizhijie429/dsh-task-notifier/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

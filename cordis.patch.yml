@@ -1,0 +1,29 @@
+# Bundle layer for `dsh-task-notifier`.
+#
+# A profile that lists this bundle in `dsh.profile.bundles` gets one inserted
+# loader entry. Every value below is the documented default; delete a key (or
+# the whole `config:` block) to keep the built-in default, or override the row
+# from the profile's own `cordis.patch.yml` by targeting `id: task-notifier`.
+- insert:
+    - id: task-notifier
+      name: '@lizhijie429/dsh-task-notifier'
+      config:
+        # Which lifecycle edges produce a desktop notification.
+        notifyOnStart: false
+        notifyOnComplete: true
+        notifyOnError: true
+        notifyOnAbort: false
+        notifyOnStep: false
+        # Notify for sub-agent sessions too (off keeps delegation quiet).
+        notifySubagents: false
+        # auto | windows | macos | linux | log | none
+        channel: auto
+        titlePrefix: DSH
+        maxBodyChars: 240
+        # Retry-exhausted model failures re-submit this prompt to the same agent.
+        autoContinue:
+          enabled: true
+          message: 继续
+          maxAttempts: 3
+          cooldownMs: 5000
+          requireRetryExhausted: true

@@ -1,0 +1,40 @@
+# E2E overlay: unreachable provider (transport failures) + task-notifier auto-continue.
+# The adapter retries twice per turn; after exhaustion the plugin sends 继续 up to 2 times.
+#
+# Run from the plugin root (relative plugin path + relative log file):
+#   dsh headless --patch test/e2e/e2e-continue.patch.yml "随便跑一轮"
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: example
+    model: example-model
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      example:
+        apiKeyEnv: PROVIDER_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:9/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 2
+          backoff:
+            initialDelayMs: 50
+            maxDelayMs: 100
+            jitterRatio: 0
+        models:
+          - id: example-model
+            name: example-model
+- insert:
+    - id: task-notifier
+      name: '../../index.mjs'
+      config:
+        channel: log
+        logFile: './test/e2e/e2e-continue.log'
+        autoContinue:
+          enabled: true
+          message: 继续
+          maxAttempts: 2
+          cooldownMs: 0
+          requireRetryExhausted: true

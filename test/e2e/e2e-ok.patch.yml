@@ -1,0 +1,32 @@
+# E2E overlay: real OpenAI-compatible provider + task-notifier, success path.
+# Needs a key in PROVIDER_API_KEY (never committed):
+#   $env:PROVIDER_API_KEY = '<your key>'
+#   dsh headless --patch test/e2e/e2e-ok.patch.yml "只回复 OK，不要调用工具。"
+#
+# The plugin path is relative to this patch file, so the fixture carries no
+# absolute/user-specific paths.
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: example
+    model: example-model
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      example:
+        apiKeyEnv: PROVIDER_API_KEY
+        api: openai-completions
+        baseURL: https://api.example.com/v1
+        models:
+          - id: example-model
+            name: example-model
+- insert:
+    - id: task-notifier
+      name: '../../index.mjs'
+      config:
+        channel: windows
+        logFile: './test/e2e/e2e-ok.log'
+        notifyOnStart: true
+        autoContinue:
+          enabled: false

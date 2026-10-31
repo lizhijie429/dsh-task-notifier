@@ -1,0 +1,214 @@
+# dsh-task-notifier
+
+DSH（DeepSeek Harness）插件：监控任务（= 一个 `turn`）执行状态，在任务结束/失败时调用**系统通知**提醒；如果失败原因是**模型请求失败次数超限**（`llm/retry` 重试预算耗尽），自动向当前会话发送一条 `继续`，让 Agent 接着干。
+
+- npm 包名：`@lizhijie429/dsh-task-notifier`；源码仓库：<https://github.com/lizhijie429/dsh-task-notifier>。
+- 零运行时依赖，纯 ESM 单目录插件，可按绝对路径直接挂载，无需构建/安装。
+- 通知通道：Windows Toast（PowerShell 5.1 WinRT）、macOS `osascript`、Linux `notify-send`，也可降级为纯日志。
+- **Windows Toast 使用 DSH 图标与名称**（注册 `DSH.TaskNotifier` AUMID），不再是 “Windows PowerShell”。
+- 状态判定只读**持久化会话事件**（`turn/start`、`llm/retry`、`turn/end`），不猜测运行中状态。
+
+## 目录结构
+
+```text
+dsh-task-notifier/
+├── index.mjs              # Cordis 插件入口：日志、配置、observer、事件订阅
+├── package.json           # dsh.bundle.patch 指向 bundle patch（用于 bundle 方式安装）
+├── cordis.patch.yml       # bundle patch：插入 task-notifier 默认配置
+├── lib/
+│   ├── config.mjs         # 默认配置、校验、归一化（非法值回退 + warning）
+│   ├── format.mjs         # 事件分类、失败码、通知文案（中文）、重试耗尽判定
+│   ├── notify.mjs         # 通道选择、命令执行、macOS AppleScript 构造
+│   ├── win-appid.mjs      # Windows 通知身份（AUMID）注册与 DSH 图标定位
+│   ├── win-toast.ps1      # Windows Toast（WinRT）+ 托盘气泡兜底
+│   ├── file-log.mjs       # JSONL 调试日志（256KB 轮转）
+│   └── observer.mjs       # 每个会话的 turn 状态机 + 自动继续
+├── assets/
+│   ├── tray.ico           # 通知身份图标（Shell 图标）
+│   └── icon.png           # Toast 内 appLogoOverride 图片
+└── test/
+    ├── config.test.mjs
+    ├── format.test.mjs
+    ├── notify.test.mjs
+    ├── observer.test.mjs
+    └── e2e/               # 本地端到端验证补丁与脚本（不参与单元测试）
+```
+
+## 安装
+
+### 方式一：直接挂载到 `desktop` profile（推荐，当前桌面端）
+
+`desktop` profile 被 Electron 占用，`dsh plugin` / `--dump-config` 等 CLI 命令会拒绝它，因此直接编辑用户补丁层 `$env:USERPROFILE\.dsh\profiles\desktop\cordis.patch.yml`（把下面示例中的 `<user>` 替换为你的 Windows 用户名）追加：
+
+```yaml
+- insert:
+    - id: task-notifier
+      name: 'C:\Users\<user>\.dsh\plugins\dsh-task-notifier\index.mjs'
+      config:
+        channel: auto
+        logFile: 'C:\Users\<user>\.dsh\plugins\dsh-task-notifier\state\task-notifier.log'
+        notifyOnStart: false
+        notifyOnComplete: true
+        notifyOnError: true
+        notifyOnAbort: false
+        notifyOnStep: false
+        notifySubagents: false
+        titlePrefix: DSH
+        maxBodyChars: 240
+        autoContinue:
+          enabled: true
+          message: 继续
+          maxAttempts: 3
+          cooldownMs: 5000
+          requireRetryExhausted: true
+```
+
+- `name` 必须是**绝对路径**（或 file URL）；也可以用包名，但需要该包在 profile 的依赖里。
+- 保存后：`desktop` profile 的 `patchReload` 缺省为 `live`，运行中的桌面端通常会热加载并挂载插件；若未生效，重启 DeepSeek Harness。
+- 验证：查看 `state/task-notifier.log` 出现 `plugin.mounted`。
+
+也可以在自己的 profile 里对同一 `id` 覆盖 `config`（补丁会**整体替换**该行的 `config`，未写的字段回退插件默认值）。
+
+### 方式二：作为 bundle 安装到普通 profile（web / headless / 自建）
+
+已发布到 npm 后（见文末「发布与市场」）：
+
+```powershell
+dsh plugin --profile web add "@lizhijie429/dsh-task-notifier"
+```
+
+直接从 GitHub 安装（无需 npm 发布；本插件无构建步骤）：
+
+```powershell
+dsh plugin --profile web add "github:lizhijie429/dsh-task-notifier"
+```
+
+从本地 checkout 安装：
+
+```powershell
+cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
+dsh plugin --profile web add "file:$PWD"
+```
+
+`package.json` 的 `dsh.bundle.patch` 会让 profile 自动加载 `cordis.patch.yml` 中的默认配置（id 为 `task-notifier`）；`engines.dsh` 要求 DSH `>=0.2.1`。
+
+### 方式三：临时验证（不修改任何 profile）
+
+```powershell
+$pluginDir = "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
+$patch = @"
+- insert:
+    - id: task-notifier
+      name: '$pluginDir\index.mjs'
+      config:
+        channel: log
+        logFile: '$pluginDir\state\e2e.log'
+        autoContinue: { enabled: true, message: 继续, maxAttempts: 2, cooldownMs: 0 }
+"@
+Set-Content -Path "$env:TEMP\task-notifier.patch.yml" -Value $patch -Encoding UTF8
+dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要调用工具。"
+```
+
+## 配置参考
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `notifyOnStart` | `false` | `turn/start` 时通知（开始刷屏，默认关） |
+| `notifyOnComplete` | `true` | `turn/end` 且 `reason.kind` 为 `completed`/`max-tokens` 时通知 |
+| `notifyOnError` | `true` | `error`/`blocked`/`interrupted` 时通知 |
+| `notifyOnAbort` | `false` | 用户取消（`aborted`）时是否通知 |
+| `notifyOnStep` | `false` | 每步（`step/start`）通知，调试用 |
+| `notifySubagents` | `false` | 是否通知子代理会话（默认只通知主会话） |
+| `channel` | `auto` | `auto`/`windows`/`macos`/`linux`/`log`/`none` |
+| `titlePrefix` | `DSH` | 通知标题前缀 |
+| `windowsAppId` | `DSH.TaskNotifier` | Windows Toast 的 AppUserModelID（决定通知中的应用名/图标） |
+| `windowsAppName` | `DSH` | Windows Toast 显示的应用名 |
+| `maxBodyChars` | `240` | 正文裁剪长度（60–2000） |
+| `logFile` | `<插件目录>/state/task-notifier.log` | JSONL 调试日志；256KB 轮转为 `.1` |
+| `autoContinue.enabled` | `true` | 是否允许自动继续 |
+| `autoContinue.message` | `继续` | 自动发送的用户消息内容 |
+| `autoContinue.maxAttempts` | `3` | 每个任务最多自动继续次数（硬上限 50） |
+| `autoContinue.cooldownMs` | `5000` | 两次自动继续之间的最小间隔；`0` 表示立即 |
+| `autoContinue.requireRetryExhausted` | `true` | 只对“模型请求重试预算耗尽”的失败自动继续 |
+| `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT` | 视为可重试的失败码 |
+
+非法配置不会抛错：逐项回退默认值并汇总到 `plugin.mounted` 的 `warnings` 日志。
+
+## 判定逻辑
+
+1. **任务 = 一个 `turn`**：多步工具调用仍是一个 turn，只在 `turn/end` 发一次通知。
+2. **状态分类**（`reason.kind`）：
+   - `completed` → ✅ 任务完成（附耗时、步数、最后一条助手文本预览）
+   - `error` → ❌ 任务失败（附失败码/信息）
+   - `aborted` → ⏹️ 任务已取消（可选，附取消原因）
+   - `blocked` → ⛔ 任务被阻塞
+   - `max-tokens` → ⚠️ 任务达到输出上限
+3. **“模型请求失败次数超限”判定**（`lib/format.mjs#isRetryExhaustedFailure`）：
+   - 失败必须是 `error`，失败码在 `retryableCodes` 内；
+   - 本轮存在 `llm/retry` 事件，且最后一条 `retry >= maxRetries`（normal 模式预算耗尽）；
+   - 没有 `llm/retry` 事件时视为首次请求即失败（`maxRetries: 0` 或瞬态失败），同样视为耗尽；
+   - `always` 模式不会“耗尽”，因此不会触发自动继续。
+   - `requireRetryExhausted: false` 时，所有 `error` 都尝试继续（更激进，不推荐默认开启）。
+4. **自动继续的落地时机**：在 `agent/status` 的 `idle` 边上调用 `agent.followup()`，而不是在 `turn/end` 监听器里直接调用。
+   - 原因：`Session.append()` 禁止在 `turn/end` 发布过程中重入 append；`followup` 会写 inbox 事件，直接调用会抛错。
+   - `idle` 边也是内置 goal 轮次驱动使用的续跑时机；在此入队后 `agent.whenIdle()` 不会提前 resolve，headless 模式也能把继续的轮次跑完。
+5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
+
+### 安全护栏
+
+- `maxAttempts` 默认 3，硬上限 50。
+- `cooldownMs` 默认 5s，避免“失败—继续—失败”紧循环。
+- 以下情况跳过继续（并写入 `auto-continue.skipped` 日志）：插件禁用、非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有用户输入。
+- 用户发来**新的人类消息**或任务成功完成时，自动继续预算重置。
+- 每个会话状态在 `session/disposed` 或插件卸载时清理；定时器带 generation 校验，避免过期回调。
+- 子代理会话默认静默（`notifySubagents: false`）。
+
+## 通知通道
+
+| 平台 | 实现 | 备注 |
+| --- | --- | --- |
+| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`，优先 WinRT Toast，失败降级托盘气泡 | 标题/正文通过环境变量 `DSH_NOTIFY_TITLE`/`DSH_NOTIFY_BODY` 传入，避免命令行转义问题。**通知身份为 DSH**：挂载时在 `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier` 注册 `DisplayName` + `IconUri`（图标取 `assets/tray.ico`），Toast 头部显示 DSH 图标/名称；注册失败或旧代码未传 AUMID 时，脚本会自动探测该注册项，探测不到才退回 Windows PowerShell 身份。专注助手/通知设置可能静音。 |
+| macOS | `osascript -e 'display notification …'` | 需要允许脚本发送通知 |
+| Linux | `notify-send title body` | 需要桌面通知守护进程 |
+| log / none | 只写本地日志 / 完全静默 | 用于调试或 CI |
+
+通知是**尽力而为**：失败不会影响任务执行，只写 `notification.failed`/`notification.log` 与 DSH 日志。
+
+## 调试日志
+
+默认：`<插件目录>/state/task-notifier.log`（JSONL，UTF-8，256KB 轮转）。关键事件：
+
+- `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、非法项 warnings
+- `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
+- `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
+- `observer.error`：事件处理异常（不会中断主流程）
+
+PowerShell 直接读 UTF-8：`Get-Content <log> -Encoding UTF8`。
+
+## 测试
+
+```powershell
+cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
+node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
+```
+
+当前 48 个用例全部通过（配置归一化、通知文案、重试耗尽判定、自动继续状态机、通道选择、AppleScript 转义、命令执行、AUMID 注册）。
+
+### 端到端验证（本机已执行）
+
+1. **成功路径**：`test/e2e/e2e-ok.patch.yml`（OpenAI 兼容 provider，密钥走 `PROVIDER_API_KEY` 环境变量 + `channel: windows`）→ headless 返回 `exit=0`；日志出现 `notification.dispatch`（开始/完成）与 `notification.sent ... TOAST_OK`。
+2. **重试耗尽 + 自动继续**：`test/e2e/e2e-continue.patch.yml`（不可达 baseURL + `maxRetries: 2`）→ 第 1/2 轮失败后分别发送 `继续`，第 3 轮达到 `maxAttempts: 2` 后停止；持久化会话中可见两轮 `user/message source={"kind":"task-notifier","plugin":"task-notifier"} text="继续"`，headless 最终以 `TRANSPORT` 退出（`exit=1`，符合预期）。
+3. **Windows 图标品牌化**：注册 `DSH.TaskNotifier` 后直接调用 `win-toast.ps1` 输出 `TOAST_OK`，通知头部显示 DSH 图标与 “DSH” 名称；不传 `DSH_NOTIFY_AUMID` 时脚本自动探测注册项，同样生效。
+
+`test/e2e/dump-session.cjs` 可解压查看会话：`node test/e2e/dump-session.cjs <session.v4.jsonl.zstd>`。
+
+## 已知限制
+
+- **Windows Toast** 依赖 PowerShell 5.1 与系统通知设置；企业镜像禁用通知时只会有日志。
+- **Windows 10（build < 22000）** 对未打包应用的 AUMID 要求存在对应的开始菜单快捷方式；若发现通知仍显示 “Windows PowerShell”，可在开始菜单创建指向本插件 `assets\tray.ico` 的快捷方式，或接受回退身份（通知本身不受影响）。Windows 11 使用 HKCU 注册项即可生效（本机已验证）。
+- 通知是异步 fire-and-forget，不保证在进程退出前送达（headless 极短任务可能只看到 `notification.dispatch`）。
+- `channel: windows` 只在 Windows 生效；其他平台请用 `auto` 或 `log`。
+- 自动继续只处理“模型请求重试耗尽”这一类失败；`AUTH`、`UNKNOWN`、用户取消等不会继续。
+- 如果用户在失败后立刻手动输入，插件检测到 inbox 非空会跳过继续，可能表现为“没有自动继续”（属于预期保护）。
+- `desktop` profile 依赖 Electron 桌面端运行插件；`dsh plugin` CLI 不适用于该 profile。
+- 修改插件代码后，运行中的桌面端不会自动重载已加载的 ESM 模块；重启一次 DeepSeek Harness 后新代码生效（图标品牌化已通过 `win-toast.ps1` 自探测兼容旧挂载，无需重启即可看到 DSH 图标）。

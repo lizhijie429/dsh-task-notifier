@@ -1,0 +1,7 @@
+# Runtime artifacts produced by the plugin (JSONL debug log, rotated copy).
+state/
+
+# Node / packaging artifacts.
+node_modules/
+*.tgz
+.npmrc
