@@ -1,5 +1,7 @@
 # dsh-task-notifier
 
+> [English](README.en.md) | 中文
+
 DSH（DeepSeek Harness）插件：监控任务（= 一个 `turn`）执行状态，在任务结束/失败时调用**系统通知**提醒；如果失败原因是**模型请求失败次数超限**（`llm/retry` 重试预算耗尽），自动向当前会话发送一条 `继续`，让 Agent 接着干。
 
 - npm 包名：`@lizhijie429/dsh-task-notifier`；源码仓库：<https://github.com/lizhijie429/dsh-task-notifier>。
@@ -192,7 +194,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 48 个用例全部通过（配置归一化、通知文案、重试耗尽判定、自动继续状态机、通道选择、AppleScript 转义、命令执行、AUMID 注册）。
+当前 49 个用例全部通过（配置归一化、通知文案、重试耗尽判定、自动继续状态机、通道选择、AppleScript 转义、命令执行、AUMID 注册）。
 
 ### 端到端验证（本机已执行）
 
