@@ -20,7 +20,9 @@ function makeAgent(options = {}) {
     status: options.status ?? 'running',
     inbox: {
       nextTurn: options.inboxPending ? [{ id: 'pending' }] : [],
-      nextStep: [],
+      nextStep: options.inboxNotices
+        ? [{ id: 'notice', role: 'user', source: { kind: 'tool-jobs' }, content: [{ type: 'text', text: 'job finished' }] }]
+        : [],
     },
     whenIdle: async () => {},
     followup(message) {
@@ -214,8 +216,19 @@ test('pending user input suppresses the continuation prompt', async () => {
   const harness = makeObserver({ agent })
   harness.session = makeSession()
   const { notifications } = await driveFailure(harness, { turn: 1, retries: [5] })
-  assert.match(notifications[0].body, /会话已有待处理输入/)
+  assert.match(notifications[0].body, /会话已有待处理的用户输入/)
   await goIdle(harness)
+})
+
+test('background-job notices do not suppress the continuation prompt', async () => {
+  const { agent, calls } = makeAgent({ inboxNotices: true })
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, { turn: 1, retries: [5] })
+  assert.match(notifications[0].body, /（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1, 'a queued tool-jobs notice must not block the retry-recovery prompt')
+  assert.equal(calls[0].content[0].text, '继续')
 })
 
 test('cooldown defers the second continuation until the timer fires', async () => {
@@ -298,7 +311,13 @@ test('session disposal clears pending continuations', async () => {
 
 test('inboxBusy and createPluginMessage are defensive', () => {
   assert.equal(inboxBusy({ inbox: { nextTurn: [], nextStep: [] } }), false)
+  // Unidentifiable entries stay conservative: they may be legacy human input.
   assert.equal(inboxBusy({ inbox: { nextTurn: [], nextStep: [{ id: 'x' }] } }), true)
+  assert.equal(inboxBusy({ inbox: { nextTurn: [{ id: 'x', source: { kind: 'user' } }], nextStep: [] } }), true)
+  // System-generated entries must not block continuation.
+  assert.equal(inboxBusy({ inbox: { nextTurn: [], nextStep: [{ id: 'x', source: { kind: 'tool-jobs' } }] } }), false)
+  assert.equal(inboxBusy({ inbox: { nextTurn: [{ id: 'x', source: { kind: 'time-context' } }], nextStep: [] } }), false)
+  assert.equal(inboxBusy({ inbox: { nextTurn: [{ id: 'x', source: { kind: 'task-notifier' } }], nextStep: [] } }), false)
   assert.equal(inboxBusy(undefined), false)
   const first = createPluginMessage('继续')
   const second = createPluginMessage('继续')

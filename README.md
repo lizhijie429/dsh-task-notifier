@@ -158,7 +158,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 
 - `maxAttempts` 默认 3，硬上限 50。
 - `cooldownMs` 默认 5s，避免“失败—继续—失败”紧循环。
-- 以下情况跳过继续（并写入 `auto-continue.skipped` 日志）：插件禁用、非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有用户输入。
+- 以下情况跳过继续（并写入 `auto-continue.skipped` 日志）：插件禁用、非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有**用户输入**。
 - 用户发来**新的人类消息**或任务成功完成时，自动继续预算重置。
 - 每个会话状态在 `session/disposed` 或插件卸载时清理；定时器带 generation 校验，避免过期回调。
 - 子代理会话默认静默（`notifySubagents: false`）。
@@ -209,6 +209,6 @@ node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs tes
 - 通知是异步 fire-and-forget，不保证在进程退出前送达（headless 极短任务可能只看到 `notification.dispatch`）。
 - `channel: windows` 只在 Windows 生效；其他平台请用 `auto` 或 `log`。
 - 自动继续只处理“模型请求重试耗尽”这一类失败；`AUTH`、`UNKNOWN`、用户取消等不会继续。
-- 如果用户在失败后立刻手动输入，插件检测到 inbox 非空会跳过继续，可能表现为“没有自动继续”（属于预期保护）。
+- 如果用户在失败后立刻手动输入，插件检测到待处理的**用户输入**会跳过继续，可能表现为“没有自动继续”（属于预期保护）；后台任务通知、时间快照等系统消息不会阻止继续。
 - `desktop` profile 依赖 Electron 桌面端运行插件；`dsh plugin` CLI 不适用于该 profile。
 - 修改插件代码后，运行中的桌面端不会自动重载已加载的 ESM 模块；重启一次 DeepSeek Harness 后新代码生效（图标品牌化已通过 `win-toast.ps1` 自探测兼容旧挂载，无需重启即可看到 DSH 图标）。
