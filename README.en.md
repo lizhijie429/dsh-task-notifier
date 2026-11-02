@@ -202,6 +202,18 @@ All 49 cases currently pass (config normalization, notification copy, retry-exha
 
 `test/e2e/dump-session.cjs` decompresses a session for inspection: `node test/e2e/dump-session.cjs <session.v4.jsonl.zstd>`.
 
+## Market index
+
+DSH has no official plugin registry: the **Discover** page only reads index sources the user adds (off by default; enable **Custom plugin indexes** under Plugins → Experimental plugins). This repository publishes a format-1 index under `docs/`:
+
+- Index URL (after GitHub Pages is enabled): <https://lizhijie429.github.io/dsh-task-notifier/index.json>
+- Regenerate: `npm run market:index` (pins the HEAD commit and commit time, copies the icon into `docs/icons/`)
+- Hosting: repo Settings → Pages → *Deploy from a branch* → `main` / `/docs`
+- Subscribe: Plugins page → Experimental plugins → enable **Custom plugin indexes** → Discover → Index sources → add the URL → search `dsh-task-notifier` and install
+- The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
+- Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
+- Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
+
 ## Known limitations
 
 - **Windows Toast** depends on PowerShell 5.1 and system notification settings; on enterprise images that disable notifications only the log is written.

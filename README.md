@@ -73,7 +73,7 @@ dsh-task-notifier/
 
 ### 方式二：作为 bundle 安装到普通 profile（web / headless / 自建）
 
-已发布到 npm 后（见文末「发布与市场」）：
+若已发布到 npm：
 
 ```powershell
 dsh plugin --profile web add "@lizhijie429/dsh-task-notifier"
@@ -203,6 +203,18 @@ node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs tes
 3. **Windows 图标品牌化**：注册 `DSH.TaskNotifier` 后直接调用 `win-toast.ps1` 输出 `TOAST_OK`，通知头部显示 DSH 图标与 “DSH” 名称；不传 `DSH_NOTIFY_AUMID` 时脚本自动探测注册项，同样生效。
 
 `test/e2e/dump-session.cjs` 可解压查看会话：`node test/e2e/dump-session.cjs <session.v4.jsonl.zstd>`。
+
+## 发布与市场索引
+
+DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的索引源**（默认关闭，需在 Plugins → Experimental plugins 打开 **Custom plugin indexes**）。本仓库在 `docs/` 下发布一份 format 1 索引：
+
+- 索引地址（启用 GitHub Pages 后）：<https://lizhijie429.github.io/dsh-task-notifier/index.json>
+- 生成/更新：`npm run market:index`（固定当前 HEAD 的 commit 与提交时间，并复制图标到 `docs/icons/`）
+- 启用托管：仓库 Settings → Pages → Source 选 *Deploy from a branch* → Branch `main`、目录 `/docs`
+- 用户订阅：Plugins 页 → Experimental plugins 打开 **Custom plugin indexes** → 进 Discover → Index sources 添加上面的地址 → 搜索 `dsh-task-notifier` 安装
+- 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
+- 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
+- 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
 
 ## 已知限制
 
