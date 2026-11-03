@@ -120,7 +120,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `notifyOnStep` | `false` | Notify on every `step/start` (debugging) |
 | `notifySubagents` | `false` | Notify subagent sessions too (main session only by default) |
 | `channel` | `auto` | `auto` / `windows` / `macos` / `linux` / `log` / `none` |
-| `titlePrefix` | `DSH` | Notification title prefix |
+| `titlePrefix` | `DSH` | Notification title prefix (≤60 chars; longer values are truncated with a warning) |
 | `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
 | `windowsAppName` | `DSH` | App display name for Windows toasts |
 | `maxBodyChars` | `240` | Body truncation length (60–2000) |
@@ -134,7 +134,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `autoContinue.respectProviderRetryAfter` | `true` | Honor `providerRetryAfterMs` as a minimum wait (>120 s skips the continuation) |
 | `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT` | Failure codes treated as retryable |
 
-Invalid configuration never throws: each field falls back to its default, the warnings go to the Host log and to the debug log as `config.warning` events, and `plugin.mounted` carries them in a `warnings` field.
+Invalid configuration never throws: each field falls back to its default, the warnings go to the Host log and to the debug log as `config.warning` events, and `plugin.mounted` carries them in a `warnings` field. Unknown keys (typos in a hand-written patch) are reported too instead of being silently ignored.
 
 ## Decision logic
 
@@ -158,6 +158,14 @@ Invalid configuration never throws: each field falls back to its default, the wa
    - The prompt is admitted one microtask after the `agent/status` listener returns: the Host must emit this turn's idle transition before the continuation turn's running transition (the reverse order makes clients treat the continuation turn as not running, so the composer keeps showing Send instead of Stop).
    - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
 5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
+
+### Integration with current DSH
+
+- **Display metadata**: `locale/en.json` and `locale/zh.json` provide `meta.title`/`meta.description`, and `exports["./icon"]` exposes `assets/icon.png`; Plugin Manager / Settings show the name, description and icon without activating the plugin.
+- **No required services**: the plugin declares no `inject`; the Agent registry is resolved lazily on the idle edge, so profiles without `agents` still mount and notify (auto-continue is skipped).
+- **Session titles**: subscribes to durable `session/title`; the notification's session label prefers the Host-generated title, then the human prompt summary, then the cwd folder name.
+- **No `Config` schema by design**: the official schema depends on `@deepseek-ai/schemastery`, which would break zero-dependency mounting from an arbitrary path; configuration stays patch-driven with runtime normalization (bounds + unknown-key warnings).
+- **No custom session event types**: reads only the existing `turn/start`, `step/start`, `llm/retry`, `session/title`, `turn/end` events and never appends new ones, honoring DSH's "the session log is the only source of truth".
 
 ### Safety rails
 
@@ -200,7 +208,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 73 cases currently pass (config normalization and bounds, notification copy, retry-exhaustion detection, the auto-continue state machine with budget/timeout/deferred-admit paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration, file-log rotation).
+All 77 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy, session-title labels, retry-exhaustion detection, the auto-continue state machine with budget/timeout/deferred-admit paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration and OEM-code-page decoding, file-log rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -221,7 +229,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.1.2`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.2.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -234,4 +242,5 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - Auto-continue only handles "model-request retries exhausted" failures; `AUTH`, `UNKNOWN`, user aborts, etc. never continue.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
+- No `Config` schema is declared (to stay dependency-free), so Settings has no graphical form for this plugin; edit the profile's `cordis.patch.yml` instead.
 - The running desktop app does not hot-reload an already loaded ESM module; restart DeepSeek Harness once for code changes to take effect (the icon branding already works with older mounts via the `win-toast.ps1` self-detection).

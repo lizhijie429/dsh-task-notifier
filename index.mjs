@@ -25,8 +25,10 @@ import { registerWindowsAppId, resolveWindowsIconPath, resolveWindowsImagePath }
 /** Cordis plugin name. */
 export const name = 'task-notifier'
 
-/** The live Agent registry is the only service the plugin reads. */
-export const inject = ['agents']
+// No required services: notifications work without the Agent registry, and a
+// profile without `agents` must still mount the plugin. The registry is
+// resolved lazily per idle edge so a service that appears after mount still
+// enables auto-continue.
 
 const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
 
@@ -86,15 +88,24 @@ export function apply(ctx, rawConfig) {
     windowsIconPath,
     windowsImagePath,
   })
-  const agents = (() => {
+  const agentRegistry = {
+    get: (sessionId) => {
+      try {
+        return (ctx.agents ?? ctx.get?.('agents'))?.get?.(sessionId)
+      } catch {
+        return undefined
+      }
+    },
+  }
+  const agentsAvailable = (() => {
     try {
-      return ctx.agents ?? ctx.get?.('agents')
+      return Boolean(ctx.agents ?? ctx.get?.('agents'))
     } catch {
-      return undefined
+      return false
     }
   })()
 
-  const observer = new TaskObserver({ config, log, fileLog, notifier, agents })
+  const observer = new TaskObserver({ config, log, fileLog, notifier, agents: agentRegistry })
 
   fileLog('plugin.mounted', {
     pid: process.pid,
@@ -102,6 +113,7 @@ export function apply(ctx, rawConfig) {
     platform: process.platform,
     channel: notifier.channel,
     warnings: warnings.slice(),
+    agentsAvailable,
     windows: {
       appId: config.windowsAppId,
       registered: windowsRegistration.ok,

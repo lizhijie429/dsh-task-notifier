@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import {
@@ -96,4 +96,16 @@ test('registerWindowsAppId reports a failing reg.exe add without throwing', () =
   assert.equal(result.ok, false)
   assert.match(result.detail, /access denied/)
   assert.equal(events.at(-1), 'windows-appid.failed')
+})
+
+test('registerWindowsAppId decodes OEM-code-page output without mangling the path', () => {
+  const gbk = Buffer.from([0xc0, 0xee, 0xd6, 0xbe, 0xbd, 0xdc])
+  const result = registerWindowsAppId({
+    platform: 'win32',
+    appId: WINDOWS_APP_ID,
+    iconPath: 'C:\\x.ico',
+    spawnSyncFn: () => ({ status: 0, stdout: gbk, stderr: Buffer.alloc(0) }),
+  })
+  assert.equal(result.ok, true)
+  assert.ok(result.detail.includes('李志杰'), `detail=${result.detail}`)
 })

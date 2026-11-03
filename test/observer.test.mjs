@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { normalizeConfig } from '../lib/config.mjs'
 import { TaskObserver, createPluginMessage, inboxBusy } from '../lib/observer.mjs'
@@ -487,4 +487,19 @@ test('the continuation is admitted after the idle dispatch returns', async () =>
   assert.equal(calls.length, 0, 'still inside the idle dispatch')
   await flushMicrotasks()
   assert.equal(calls.length, 1)
+})
+
+test('durable session titles label notifications', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, {
+    type: 'session/title',
+    data: { title: 'Git push privacy audit' },
+  })
+  harness.observer.onSessionEvent(harness.session, turnStart(1))
+  harness.observer.onSessionEvent(harness.session, humanMessage('修复登录接口'))
+  harness.observer.onSessionEvent(harness.session, turnEnd(1, { kind: 'completed' }))
+  await flushMicrotasks()
+  assert.match(harness.notifications[0].body, /Git push privacy audit/)
 })

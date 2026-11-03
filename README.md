@@ -122,7 +122,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `notifyOnStep` | `false` | 每步（`step/start`）通知，调试用 |
 | `notifySubagents` | `false` | 是否通知子代理会话（默认只通知主会话） |
 | `channel` | `auto` | `auto`/`windows`/`macos`/`linux`/`log`/`none` |
-| `titlePrefix` | `DSH` | 通知标题前缀 |
+| `titlePrefix` | `DSH` | 通知标题前缀（≤60 字符，超出截断并告警） |
 | `windowsAppId` | `DSH.TaskNotifier` | Windows Toast 的 AppUserModelID（决定通知中的应用名/图标） |
 | `windowsAppName` | `DSH` | Windows Toast 显示的应用名 |
 | `maxBodyChars` | `240` | 正文裁剪长度（60–2000） |
@@ -136,7 +136,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `autoContinue.respectProviderRetryAfter` | `true` | 若失败带 `providerRetryAfterMs`，至少等待该时长再继续（>120s 则跳过） |
 | `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT` | 视为可重试的失败码 |
 
-非法配置不会抛错：逐项回退默认值，既写 Host 日志，也作为 `config.warning` 事件写进调试日志，并汇总到 `plugin.mounted` 的 `warnings` 字段。
+非法配置不会抛错：逐项回退默认值，既写 Host 日志，也作为 `config.warning` 事件写进调试日志，并汇总到 `plugin.mounted` 的 `warnings` 字段；未知配置键（手写 patch 拼写错误）同样会告警，不再静默失效。
 
 ## 判定逻辑
 
@@ -160,6 +160,14 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
    - 「继续」不在 `agent/status` 监听器里同步发送，而是延后一个微任务：先让 Host 发出本轮 idle 状态，再启动续跑轮次的 running 状态（顺序反了会让客户端把续跑轮次误判为“未运行”，发送按钮不切换成「停止」）。
    - 若 `turn/end` 时 inbox 已有**下一轮**条目（goal/schedule/subagent-settled 等），驱动器会直接开下一轮、不经过 idle；插件此时跳过继续并记 `next-turn-pending`，避免预算被“永远发不出去”的指令消耗。
 5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
+
+### 与最新 DSH 的集成
+
+- **显示元数据**：`locale/en.json`、`locale/zh.json` 提供 `meta.title`/`meta.description`，并通过 `exports["./icon"]` 暴露 `assets/icon.png`；Plugin Manager / Settings 无需激活插件即可显示名称、描述与图标。
+- **无必需服务**：不声明 `inject`；Agent 注册表在 idle 边上懒查询，缺少 `agents` 服务的 profile 仍可挂载并发送通知（自动继续会跳过）。
+- **会话标题**：订阅持久化的 `session/title`，通知里的「会话：」优先显示 Host 标题策略生成的标题，其次才是人类 prompt 摘要与 cwd 目录名。
+- **刻意不声明 `Config` schema**：官方 schema 依赖 `@deepseek-ai/schemastery`，声明它会破坏「任意路径零依赖挂载」；配置由 patch + 运行时归一化（含边界与未知键告警）保证兼容。
+- **不追加自定义会话事件类型**：只读既有 `turn/start`、`step/start`、`llm/retry`、`session/title`、`turn/end`，不写新事件，满足 DSH「会话日志是唯一事实来源」的约束。
 
 ### 安全护栏
 
@@ -202,7 +210,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 73 个用例全部通过（配置归一化与边界、通知文案、重试耗尽判定、自动继续状态机与预算/超时/延迟入队、通道选择与降级标记、AppleScript 转义、命令执行、AUMID 注册、file-log 轮转）。
+当前 77 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案、会话标题标签、重试耗尽判定、自动继续状态机与预算/超时/延迟入队、通道选择与降级标记、AppleScript 转义、命令执行、AUMID 注册与 OEM 编码解码、file-log 轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -223,7 +231,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.1.2`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.2.0`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 
@@ -236,4 +244,5 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 自动继续只处理“模型请求重试耗尽”这一类失败；`AUTH`、`UNKNOWN`、用户取消等不会继续。
 - 如果用户在失败后立刻手动输入，插件检测到待处理的**用户输入**会跳过继续，可能表现为“没有自动继续”（属于预期保护）；后台任务通知、时间快照等系统消息不会阻止继续。
 - `desktop` profile 依赖 Electron 桌面端运行插件；`dsh plugin` CLI 不适用于该 profile。
+- 未声明 `Config` schema（保持零依赖），Settings 页没有本插件的图形化配置表单；请直接编辑 profile 的 `cordis.patch.yml`。
 - 修改插件代码后，运行中的桌面端不会自动重载已加载的 ESM 模块；重启一次 DeepSeek Harness 后新代码生效（图标品牌化已通过 `win-toast.ps1` 自探测兼容旧挂载，无需重启即可看到 DSH 图标）。

@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { normalizeConfig, defaultConfig } from '../lib/config.mjs'
 
@@ -109,4 +109,17 @@ test('null logFile disables logging with a warning', () => {
   const { config, warnings } = normalizeConfig({ logFile: null }, '/p')
   assert.equal(config.logFile, false)
   assert.ok(warnings.some((warning) => warning.includes('logFile')))
+})
+
+test('unknown config keys produce warnings', () => {
+  const { config, warnings } = normalizeConfig({ notifyOnComplet: true, autoContinue: { maxAtempts: 5 } }, '/p')
+  assert.equal(config.notifyOnComplete, true)
+  assert.ok(warnings.some((warning) => warning.includes('notifyOnComplet')))
+  assert.ok(warnings.some((warning) => warning.includes('maxAtempts')))
+})
+
+test('titlePrefix is capped at 60 characters', () => {
+  const { config, warnings } = normalizeConfig({ titlePrefix: 'x'.repeat(80) }, '/p')
+  assert.equal(config.titlePrefix.length, 60)
+  assert.ok(warnings.some((warning) => warning.includes('titlePrefix')))
 })
