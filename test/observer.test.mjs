@@ -476,3 +476,15 @@ test('unknown turn/end kinds are silent', async () => {
   assert.equal(harness.notifications.length, 0)
   assert.equal(calls.length, 0)
 })
+
+test('the continuation is admitted after the idle dispatch returns', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  await driveFailure(harness, { turn: 1, retries: [5] })
+
+  harness.observer.onAgentStatus({ agent, status: 'idle' })
+  assert.equal(calls.length, 0, 'still inside the idle dispatch')
+  await flushMicrotasks()
+  assert.equal(calls.length, 1)
+})

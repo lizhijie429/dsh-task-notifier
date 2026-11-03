@@ -128,6 +128,10 @@ export function apply(ctx, rawConfig) {
     })
     const offStatus = ctx.on('agent/status', (payload) => {
       try {
+        fileLog('agent.status', {
+          sessionId: payload?.agent?.id,
+          status: payload?.status,
+        })
         observer.onAgentStatus(payload)
       } catch (error) {
         log('warn', `agent status handler failed: ${String(error?.message ?? error)}`)

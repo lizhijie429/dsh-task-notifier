@@ -155,6 +155,7 @@ Invalid configuration never throws: each field falls back to its default, the wa
 4. **Where continuation is admitted**: on the `agent/status` `idle` edge, via `agent.followup()` — not inside the `turn/end` listener.
    - Reason: `Session.append()` forbids re-entrant appends while `turn/end` is being published; `followup` writes inbox events, so calling it directly throws.
    - The `idle` edge is also what the built-in goal-round driver uses. Enqueuing there keeps `agent.whenIdle()` unresolved until the continuation turn runs, so headless runs also finish the continuation turn.
+   - The prompt is admitted one microtask after the `agent/status` listener returns: the Host must emit this turn's idle transition before the continuation turn's running transition (the reverse order makes clients treat the continuation turn as not running, so the composer keeps showing Send instead of Stop).
    - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
 5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
 
@@ -187,6 +188,7 @@ Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation).
 - `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
+- `agent.status`: every Agent status transition (`running`/`idle`), for diagnosing continuation-turn status ordering
 - `observer.error`: event-handling exceptions (never break the main flow)
 
 Read UTF-8 directly in PowerShell: `Get-Content <log> -Encoding UTF8`.
@@ -198,7 +200,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 72 cases currently pass (config normalization and bounds, notification copy, retry-exhaustion detection, the auto-continue state machine with budget/timeout paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration, file-log rotation).
+All 73 cases currently pass (config normalization and bounds, notification copy, retry-exhaustion detection, the auto-continue state machine with budget/timeout/deferred-admit paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration, file-log rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -219,7 +221,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.1.1`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.1.2`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 

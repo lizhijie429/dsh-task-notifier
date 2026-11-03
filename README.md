@@ -157,6 +157,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 4. **自动继续的落地时机**：在 `agent/status` 的 `idle` 边上调用 `agent.followup()`，而不是在 `turn/end` 监听器里直接调用。
    - 原因：`Session.append()` 禁止在 `turn/end` 发布过程中重入 append；`followup` 会写 inbox 事件，直接调用会抛错。
    - `idle` 边也是内置 goal 轮次驱动使用的续跑时机；在此入队后 `agent.whenIdle()` 不会提前 resolve，headless 模式也能把继续的轮次跑完。
+   - 「继续」不在 `agent/status` 监听器里同步发送，而是延后一个微任务：先让 Host 发出本轮 idle 状态，再启动续跑轮次的 running 状态（顺序反了会让客户端把续跑轮次误判为“未运行”，发送按钮不切换成「停止」）。
    - 若 `turn/end` 时 inbox 已有**下一轮**条目（goal/schedule/subagent-settled 等），驱动器会直接开下一轮、不经过 idle；插件此时跳过继续并记 `next-turn-pending`，避免预算被“永远发不出去”的指令消耗。
 5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
 
@@ -189,6 +190,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、`warnings`（非法配置）、Windows 注册结果
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
+- `agent.status`：每次 Agent 状态切换（`running`/`idle`），用于排查续跑轮次的状态时序
 - `observer.error`：事件处理异常（不会中断主流程）
 
 PowerShell 直接读 UTF-8：`Get-Content <log> -Encoding UTF8`。
@@ -200,7 +202,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 72 个用例全部通过（配置归一化与边界、通知文案、重试耗尽判定、自动继续状态机与预算/超时、通道选择与降级标记、AppleScript 转义、命令执行、AUMID 注册、file-log 轮转）。
+当前 73 个用例全部通过（配置归一化与边界、通知文案、重试耗尽判定、自动继续状态机与预算/超时/延迟入队、通道选择与降级标记、AppleScript 转义、命令执行、AUMID 注册、file-log 轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -221,7 +223,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.1.1`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.1.2`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 
