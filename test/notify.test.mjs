@@ -82,7 +82,8 @@ test('windows channel passes text through environment, not argv', async () => {
   const result = await notifier.dispatch({ title: 'a "quoted" title', body: 'line1\nline2' })
   assert.equal(result.ok, true)
   assert.equal(invocations.length, 1)
-  assert.deepEqual(invocations[0].args.slice(-2), ['-File', invocations[0].args.at(-1)])
+  assert.equal(invocations[0].args.at(-2), '-File')
+  assert.ok(invocations[0].args.at(-1).endsWith('win-toast.ps1'))
   assert.equal(invocations[0].env.DSH_NOTIFY_TITLE, 'a "quoted" title')
   assert.equal(invocations[0].env.DSH_NOTIFY_BODY, 'line1\nline2')
   assert.equal(invocations[0].env.DSH_NOTIFY_AUMID, 'DSH.TaskNotifier')
@@ -113,4 +114,60 @@ test('failed dispatch is reported, never thrown', async () => {
   const result = await notifier.dispatch({ title: 't', body: 'b' })
   assert.equal(result.ok, false)
   assert.equal(result.detail, 'toast denied')
+})
+
+test('windows dispatch reports the toast mode and degrades visibly', async () => {
+  const events = []
+  const notifier = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    run: async () => ({ code: 0, stdout: 'BALLOON_OK\n', stderr: '', timedOut: false }),
+    fileLog: (event, data) => events.push({ event, data }),
+  })
+  const result = await notifier.dispatch({ title: 't', body: 'b' })
+  assert.equal(result.mode, 'BALLOON_OK')
+  const sent = events.find((entry) => entry.event === 'notification.sent')
+  assert.equal(sent.data.mode, 'BALLOON_OK')
+  assert.equal(sent.data.degraded, true)
+})
+
+test('windowsImagePath wins over windowsIconPath for the banner image', async () => {
+  const invocations = []
+  const notifier = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    windowsIconPath: 'C:\\plugins\\assets\\tray.ico',
+    windowsImagePath: 'C:\\plugins\\assets\\icon.png',
+    run: async (command, args, options) => {
+      invocations.push({ env: options.env })
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  await notifier.dispatch({ title: 't', body: 'b' })
+  assert.equal(invocations[0].env.DSH_NOTIFY_ICON, 'C:\\plugins\\assets\\icon.png')
+})
+
+test('dispatches are serialized', async () => {
+  const order = []
+  let release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const notifier = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    run: async () => {
+      order.push('start')
+      await gate
+      order.push('end')
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  const first = notifier.dispatch({ title: '1', body: 'b' })
+  const second = notifier.dispatch({ title: '2', body: 'b' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(order, ['start'], 'the second dispatch waits for the first')
+  release()
+  await Promise.all([first, second])
+  assert.deepEqual(order, ['start', 'end', 'start', 'end'])
 })

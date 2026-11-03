@@ -86,6 +86,7 @@ test('buildNotification renders completion with duration, steps and preview', ()
     durationMs: 63_000,
     steps: 5,
     preview: '已修复并补充回归测试。',
+    includePreview: true,
     titlePrefix: 'DSH',
     maxBodyChars: 240,
   })
@@ -94,6 +95,16 @@ test('buildNotification renders completion with duration, steps and preview', ()
   assert.match(body, /1m3s/)
   assert.match(body, /5 步/)
   assert.match(body, /已修复并补充回归测试/)
+})
+
+test('buildNotification hides the model preview unless includePreview is on', () => {
+  const { body } = buildNotification({
+    phase: 'complete',
+    label: '修复登录接口',
+    preview: 'SECRET model output',
+  })
+  assert.match(body, /修复登录接口/)
+  assert.doesNotMatch(body, /SECRET/)
 })
 
 test('buildNotification explains the continuation attempt on failure', () => {
@@ -105,7 +116,23 @@ test('buildNotification explains the continuation attempt on failure', () => {
   })
   assert.match(title, /任务失败/)
   assert.match(body, /SERVER: upstream 502/)
-  assert.match(body, /已自动发送「继续」（2\/3）/)
+  assert.match(body, /已排队「继续」（2\/3）/)
+})
+
+test('buildNotification explains new skip reasons', () => {
+  for (const [reason, text] of [
+    ['next-turn-pending', '会话已有下一轮待处理输入'],
+    ['provider-retry-after', 'provider 要求等待较长时间后重试'],
+    ['no-turn-context', '缺少轮次上下文'],
+  ]) {
+    const { body } = buildNotification({
+      phase: 'error',
+      label: '构建项目',
+      failure: { code: 'RATE_LIMIT' },
+      autoContinue: { skipped: reason },
+    })
+    assert.match(body, new RegExp(`未自动继续：${text}`))
+  }
 })
 
 test('buildNotification explains why a continuation was skipped', () => {
@@ -123,6 +150,7 @@ test('buildNotification clips the body to maxBodyChars', () => {
     phase: 'complete',
     label: 'x'.repeat(100),
     preview: 'y'.repeat(500),
+    includePreview: true,
     maxBodyChars: 60,
   })
   assert.ok(body.length <= 60, `body length ${body.length}`)

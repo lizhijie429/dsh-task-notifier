@@ -19,7 +19,11 @@ function makeAgent(options = {}) {
     id: options.id ?? 'session-1',
     status: options.status ?? 'running',
     inbox: {
-      nextTurn: options.inboxPending ? [{ id: 'pending' }] : [],
+      nextTurn: options.inboxPending
+        ? [{ id: 'pending' }]
+        : options.inboxNextTurnNotices
+          ? [{ id: 'queued', role: 'user', source: { kind: 'tool-jobs' } }]
+          : [],
       nextStep: options.inboxNotices
         ? [{ id: 'notice', role: 'user', source: { kind: 'tool-jobs' }, content: [{ type: 'text', text: 'job finished' }] }]
         : [],
@@ -105,7 +109,15 @@ async function goIdle(harness) {
 
 async function driveFailure(
   harness,
-  { turn, retries = [5], maxRetries = retries.at(-1), code = 'SERVER', message = 'upstream 502', human = turn === 1 } = {},
+  {
+    turn,
+    retries = [5],
+    maxRetries = retries.at(-1),
+    code = 'SERVER',
+    message = 'upstream 502',
+    human = turn === 1,
+    failure = {},
+  } = {},
 ) {
   const { observer, notifications, timers } = harness
   const session = harness.session
@@ -113,14 +125,14 @@ async function driveFailure(
   if (human) observer.onSessionEvent(session, humanMessage('帮我修一下登录接口'))
   for (const retry of retries) observer.onSessionEvent(session, retryEvent(turn, retry, maxRetries))
   if (turn === 1) observer.onSessionEvent(session, assistantMessage('正在检查代码…'))
-  observer.onSessionEvent(session, turnEnd(turn, { kind: 'error', error: { code, message } }))
+  observer.onSessionEvent(session, turnEnd(turn, { kind: 'error', error: { code, message, ...failure } }))
   await flushMicrotasks()
   return { notifications, timers }
 }
 
 test('completed turn sends a success notification with preview', async () => {
   const { agent } = makeAgent()
-  const harness = makeObserver({ agent })
+  const harness = makeObserver({ agent, config: makeConfig({ includePreview: true }) })
   harness.session = makeSession()
   harness.observer.onSessionEvent(harness.session, turnStart(1))
   harness.observer.onSessionEvent(harness.session, humanMessage('修复登录接口'))
@@ -134,6 +146,18 @@ test('completed turn sends a success notification with preview', async () => {
   assert.match(harness.notifications[0].body, /已完成修复/)
 })
 
+test('the model preview stays hidden by default', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, turnStart(1))
+  harness.observer.onSessionEvent(harness.session, humanMessage('修复登录接口'))
+  harness.observer.onSessionEvent(harness.session, assistantMessage('SECRET model output'))
+  harness.observer.onSessionEvent(harness.session, turnEnd(1, { kind: 'completed' }))
+  await flushMicrotasks()
+  assert.doesNotMatch(harness.notifications[0].body, /SECRET/)
+})
+
 test('retry-exhausted failure admits the continuation prompt on the idle edge', async () => {
   const { agent, calls } = makeAgent()
   const harness = makeObserver({ agent })
@@ -143,7 +167,7 @@ test('retry-exhausted failure admits the continuation prompt on the idle edge', 
   assert.equal(notifications.length, 1)
   assert.match(notifications[0].title, /任务失败/)
   assert.match(notifications[0].body, /SERVER: upstream 502/)
-  assert.match(notifications[0].body, /已自动发送「继续」（1\/3）/)
+  assert.match(notifications[0].body, /已排队「继续」（1\/3）/)
   assert.equal(calls.length, 0, 'the prompt waits for the idle edge')
 
   await goIdle(harness)
@@ -323,4 +347,132 @@ test('inboxBusy and createPluginMessage are defensive', () => {
   const second = createPluginMessage('继续')
   assert.notEqual(first.id, second.id)
   assert.deepEqual(first.content, [{ type: 'text', text: '继续' }])
+})
+
+test('a superseded pending continuation is dropped without consuming the budget', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  await driveFailure(harness, { turn: 1, retries: [5] })
+
+  harness.observer.onSessionEvent(harness.session, turnStart(2))
+  const state = harness.observer.states.get(harness.session.id)
+  assert.equal(state.autoContinueCount, 0)
+  assert.ok(
+    harness.fileLogs.some((entry) => entry.event === 'auto-continue.skipped' && entry.data.reason === 'superseded'),
+  )
+
+  const { notifications } = await driveFailure(harness, { turn: 2, retries: [5] })
+  assert.match(notifications.at(-1).body, /（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1)
+})
+
+test('a skipped flush does not consume the continuation budget', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  await driveFailure(harness, { turn: 1, retries: [5] })
+
+  const state = harness.observer.states.get(harness.session.id)
+  const savedAgents = harness.observer.agents
+  harness.observer.agents = { get: () => undefined }
+  harness.observer.onAgentStatus({ agent, status: 'idle' })
+  await flushMicrotasks()
+  assert.equal(calls.length, 0)
+  assert.equal(state.autoContinueCount, 0)
+  assert.ok(harness.fileLogs.some((entry) => entry.event === 'auto-continue.skipped'))
+  harness.observer.agents = savedAgents
+
+  const { notifications } = await driveFailure(harness, { turn: 2, retries: [5] })
+  assert.match(notifications.at(-1).body, /（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1)
+})
+
+test('queued next-turn entries skip the continuation without trying', async () => {
+  const { agent, calls } = makeAgent({ inboxNextTurnNotices: true })
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, { turn: 1, retries: [5] })
+  assert.match(notifications[0].body, /未自动继续：会话已有下一轮待处理输入/)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+})
+
+test('providerRetryAfterMs delays the continuation', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent, config: makeConfig({ autoContinue: { cooldownMs: 0 } }) })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, {
+    turn: 1,
+    retries: [5],
+    code: 'RATE_LIMIT',
+    failure: { providerRetryAfterMs: 30_000 },
+  })
+  assert.match(notifications[0].body, /已排队「继续」（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+  assert.equal(harness.timers.length, 1)
+  harness.clock.now += 30_000
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(calls.length, 1)
+})
+
+test('a provider retry delay beyond the cap skips the continuation', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, {
+    turn: 1,
+    retries: [5],
+    code: 'RATE_LIMIT',
+    failure: { providerRetryAfterMs: 600_000 },
+  })
+  assert.match(notifications[0].body, /未自动继续：provider 要求等待较长时间后重试/)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+  assert.equal(harness.timers.length, 0)
+})
+
+test('subagent turns never auto-continue even when notifications are enabled', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent, config: makeConfig({ notifySubagents: true }) })
+  harness.session = makeSession('session-1', { cwd: '/work/project', origin: 'subagent' })
+  const { notifications } = await driveFailure(harness, { turn: 1, retries: [5] })
+  assert.equal(notifications.length, 1)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+})
+
+test('retries from another turn do not influence the decision', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, turnStart(1))
+  harness.observer.onSessionEvent(harness.session, retryEvent(1, 5, 5))
+  harness.observer.onSessionEvent(harness.session, turnEnd(1, { kind: 'completed' }))
+
+  harness.observer.onSessionEvent(harness.session, turnStart(2))
+  harness.observer.onSessionEvent(harness.session, humanMessage('继续修'))
+  harness.observer.onSessionEvent(harness.session, retryEvent(2, 1, 5))
+  harness.observer.onSessionEvent(harness.session, turnEnd(2, { kind: 'error', error: { code: 'SERVER', message: 'x' } }))
+  await flushMicrotasks()
+
+  assert.match(harness.notifications.at(-1).body, /未自动继续：非模型请求重试耗尽/)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+})
+
+test('unknown turn/end kinds are silent', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, turnStart(1))
+  harness.observer.onSessionEvent(harness.session, humanMessage('fork'))
+  harness.observer.onSessionEvent(harness.session, turnEnd(1, { kind: 'forked' }))
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 0)
+  assert.equal(calls.length, 0)
 })

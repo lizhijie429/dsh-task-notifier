@@ -20,7 +20,7 @@ import { normalizeConfig } from './lib/config.mjs'
 import { createFileLog } from './lib/file-log.mjs'
 import { createNotifier, resolveChannel } from './lib/notify.mjs'
 import { TaskObserver } from './lib/observer.mjs'
-import { registerWindowsAppId, resolveWindowsIconPath } from './lib/win-appid.mjs'
+import { registerWindowsAppId, resolveWindowsIconPath, resolveWindowsImagePath } from './lib/win-appid.mjs'
 
 /** Cordis plugin name. */
 export const name = 'task-notifier'
@@ -47,25 +47,36 @@ export function apply(ctx, rawConfig) {
   }
 
   const { config, warnings } = normalizeConfig(rawConfig, PLUGIN_DIR)
-  for (const warning of warnings) log('warn', `config: ${warning}`)
-
   const fileLog = createFileLog({ config, logger: { warn: (message) => log('warn', message) } })
+  for (const warning of warnings) {
+    log('warn', `config: ${warning}`)
+    fileLog('config.warning', { warning })
+  }
 
   // Brand Windows toasts as DSH instead of "Windows PowerShell": register an
   // AUMID under HKCU (best effort) and pass it to the toast helper. When the
   // registration fails the helper keeps PowerShell's registered identity, so a
-  // notification still appears, just with the generic name/icon.
+  // notification still appears, just with the generic name/icon. Registration
+  // failures must never break the plugin mount.
   const windowsIconPath = resolveWindowsIconPath(PLUGIN_DIR)
+  const windowsImagePath = resolveWindowsImagePath(PLUGIN_DIR)
   const windowsChannel = resolveChannel(config.channel, process.platform) === 'windows'
-  const windowsRegistration = windowsChannel
-    ? registerWindowsAppId({
+  const windowsRegistration = (() => {
+    if (!windowsChannel) return { ok: false, skipped: 'channel' }
+    try {
+      return registerWindowsAppId({
         appId: config.windowsAppId,
         displayName: config.windowsAppName,
         iconPath: windowsIconPath,
         log,
         fileLog,
       })
-    : { ok: false, skipped: 'channel' }
+    } catch (error) {
+      log('warn', `Windows notification identity registration threw: ${String(error?.message ?? error)}`)
+      fileLog('windows-appid.error', { reason: String(error?.message ?? error) })
+      return { ok: false, detail: String(error?.message ?? error) }
+    }
+  })()
 
   const notifier = createNotifier({
     config,
@@ -73,6 +84,7 @@ export function apply(ctx, rawConfig) {
     fileLog,
     windowsAppId: windowsRegistration.ok ? config.windowsAppId : undefined,
     windowsIconPath,
+    windowsImagePath,
   })
   const agents = (() => {
     try {
@@ -89,12 +101,14 @@ export function apply(ctx, rawConfig) {
     node: process.version,
     platform: process.platform,
     channel: notifier.channel,
+    warnings: warnings.slice(),
     windows: {
       appId: config.windowsAppId,
       registered: windowsRegistration.ok,
       ...(windowsRegistration.skipped ? { skipped: windowsRegistration.skipped } : {}),
       ...(windowsRegistration.detail ? { detail: String(windowsRegistration.detail).slice(0, 300) } : {}),
       iconPath: windowsIconPath ?? null,
+      imagePath: windowsImagePath ?? null,
     },
     config: sanitizedConfig(config),
   })
@@ -167,8 +181,12 @@ function sanitizedConfig(config) {
     notifyOnStep: config.notifyOnStep,
     notifySubagents: config.notifySubagents,
     channel: config.channel,
+    titlePrefix: config.titlePrefix,
     windowsAppId: config.windowsAppId,
     windowsAppName: config.windowsAppName,
+    maxBodyChars: config.maxBodyChars,
+    includePreview: config.includePreview,
+    logFile: config.logFile,
     autoContinue: {
       ...config.autoContinue,
     },

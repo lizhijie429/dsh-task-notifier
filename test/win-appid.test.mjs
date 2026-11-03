@@ -41,11 +41,29 @@ test('buildAppIdCommands omits IconUri when no icon is available', () => {
   assert.equal(commands[0].args.includes('IconUri'), false)
 })
 
-test('registerWindowsAppId is skipped outside Windows or without an icon', () => {
+test('registerWindowsAppId is skipped outside Windows', () => {
   const platform = registerWindowsAppId({ platform: 'darwin', iconPath: 'C:\\x.ico' })
   assert.deepEqual(platform, { ok: false, skipped: 'platform' })
-  const noIcon = registerWindowsAppId({ platform: 'win32', iconPath: undefined })
-  assert.deepEqual(noIcon, { ok: false, skipped: 'no-icon' })
+})
+
+test('registerWindowsAppId brands the name even without an icon', () => {
+  const calls = []
+  const events = []
+  const result = registerWindowsAppId({
+    platform: 'win32',
+    appId: WINDOWS_APP_ID,
+    displayName: WINDOWS_APP_NAME,
+    iconPath: undefined,
+    spawnSyncFn: (command, args) => {
+      calls.push({ command, args })
+      return { status: 0, stdout: `${args[1]}\r\n`, stderr: '' }
+    },
+    fileLog: (event) => events.push(event),
+  })
+  assert.equal(result.ok, true)
+  assert.equal(calls.length, 2)
+  assert.equal(calls.some((call) => call.args.includes('IconUri')), false)
+  assert.equal(events.at(-1), 'windows-appid.registered')
 })
 
 test('registerWindowsAppId runs every reg.exe command and reports success', () => {

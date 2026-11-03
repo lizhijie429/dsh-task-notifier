@@ -126,15 +126,17 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `windowsAppId` | `DSH.TaskNotifier` | Windows Toast 的 AppUserModelID（决定通知中的应用名/图标） |
 | `windowsAppName` | `DSH` | Windows Toast 显示的应用名 |
 | `maxBodyChars` | `240` | 正文裁剪长度（60–2000） |
-| `logFile` | `<插件目录>/state/task-notifier.log` | JSONL 调试日志；256KB 轮转为 `.1` |
+| `includePreview` | `false` | 是否在通知里附模型输出预览（默认关，避免锁屏泄露内容） |
+| `logFile` | `<插件目录>/state/task-notifier.log` | JSONL 调试日志；相对路径按插件目录解析；256KB 轮转为 `.1` |
 | `autoContinue.enabled` | `true` | 是否允许自动继续 |
 | `autoContinue.message` | `继续` | 自动发送的用户消息内容 |
 | `autoContinue.maxAttempts` | `3` | 每个任务最多自动继续次数（硬上限 50） |
 | `autoContinue.cooldownMs` | `5000` | 两次自动继续之间的最小间隔；`0` 表示立即 |
 | `autoContinue.requireRetryExhausted` | `true` | 只对“模型请求重试预算耗尽”的失败自动继续 |
+| `autoContinue.respectProviderRetryAfter` | `true` | 若失败带 `providerRetryAfterMs`，至少等待该时长再继续（>120s 则跳过） |
 | `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT` | 视为可重试的失败码 |
 
-非法配置不会抛错：逐项回退默认值并汇总到 `plugin.mounted` 的 `warnings` 日志。
+非法配置不会抛错：逐项回退默认值，既写 Host 日志，也作为 `config.warning` 事件写进调试日志，并汇总到 `plugin.mounted` 的 `warnings` 字段。
 
 ## 判定逻辑
 
@@ -150,26 +152,30 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
    - 本轮存在 `llm/retry` 事件，且最后一条 `retry >= maxRetries`（normal 模式预算耗尽）；
    - 没有 `llm/retry` 事件时视为首次请求即失败（`maxRetries: 0` 或瞬态失败），同样视为耗尽；
    - `always` 模式不会“耗尽”，因此不会触发自动继续。
+   - 失败若带 `providerRetryAfterMs`（provider 要求稍后重试），插件会按该值延迟再继续；超过 120s 则跳过（由 `autoContinue.respectProviderRetryAfter` 控制）。
    - `requireRetryExhausted: false` 时，所有 `error` 都尝试继续（更激进，不推荐默认开启）。
 4. **自动继续的落地时机**：在 `agent/status` 的 `idle` 边上调用 `agent.followup()`，而不是在 `turn/end` 监听器里直接调用。
    - 原因：`Session.append()` 禁止在 `turn/end` 发布过程中重入 append；`followup` 会写 inbox 事件，直接调用会抛错。
    - `idle` 边也是内置 goal 轮次驱动使用的续跑时机；在此入队后 `agent.whenIdle()` 不会提前 resolve，headless 模式也能把继续的轮次跑完。
+   - 若 `turn/end` 时 inbox 已有**下一轮**条目（goal/schedule/subagent-settled 等），驱动器会直接开下一轮、不经过 idle；插件此时跳过继续并记 `next-turn-pending`，避免预算被“永远发不出去”的指令消耗。
 5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
 
 ### 安全护栏
 
 - `maxAttempts` 默认 3，硬上限 50。
-- `cooldownMs` 默认 5s，避免“失败—继续—失败”紧循环。
-- 以下情况跳过继续（并写入 `auto-continue.skipped` 日志）：插件禁用、非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有**用户输入**。
+- `cooldownMs` 默认 5s，避免“失败—继续—失败”紧循环；`providerRetryAfterMs` 可作为更长的等待。
+- **只有 `followup()` 真正成功后才会消耗一次尝试次数**；被跳过（agent 已消失、inbox 有用户输入、下一轮待处理、被新 turn 取代）不会扣预算，通知文案也只说「已排队」。
+- 以下情况跳过继续：插件禁用、非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有**用户输入**、inbox 已有下一轮条目、provider 要求等待过久、缺少轮次上下文（`no-turn-context`）。跳过原因会写入调试日志。
 - 用户发来**新的人类消息**或任务成功完成时，自动继续预算重置。
 - 每个会话状态在 `session/disposed` 或插件卸载时清理；定时器带 generation 校验，避免过期回调。
-- 子代理会话默认静默（`notifySubagents: false`）。
+- 子代理会话默认静默（`notifySubagents: false`），且**永不自动继续**。
+- 未知的 `turn/end` reason kind（如 `forked`）不会当作“任务完成”发通知。
 
 ## 通知通道
 
 | 平台 | 实现 | 备注 |
 | --- | --- | --- |
-| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`，优先 WinRT Toast，失败降级托盘气泡 | 标题/正文通过环境变量 `DSH_NOTIFY_TITLE`/`DSH_NOTIFY_BODY` 传入，避免命令行转义问题。**通知身份为 DSH**：挂载时在 `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier` 注册 `DisplayName` + `IconUri`（图标取 `assets/tray.ico`），Toast 头部显示 DSH 图标/名称；注册失败或旧代码未传 AUMID 时，脚本会自动探测该注册项，探测不到才退回 Windows PowerShell 身份。专注助手/通知设置可能静音。 |
+| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`，优先 WinRT Toast，失败降级托盘气泡 | 标题/正文通过环境变量 `DSH_NOTIFY_TITLE`/`DSH_NOTIFY_BODY` 传入，避免命令行转义问题；XML 1.0 不允许的 C0 控制字符会先被剥离，避免 `LoadXml` 抛错。**通知身份为 DSH**：挂载时在 `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier` 注册 `DisplayName` + `IconUri`（图标取 `assets/tray.ico`），Toast 头部显示 DSH 图标/名称；banner 图片用 `assets/icon.png`（WinRT `appLogoOverride` 不支持 `.ico`）。注册失败或旧代码未传 AUMID 时，脚本会自动探测该注册项，探测不到才退回 Windows PowerShell 身份。专注助手/通知设置可能静音。 |
 | macOS | `osascript -e 'display notification …'` | 需要允许脚本发送通知 |
 | Linux | `notify-send title body` | 需要桌面通知守护进程 |
 | log / none | 只写本地日志 / 完全静默 | 用于调试或 CI |
@@ -180,7 +186,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 
 默认：`<插件目录>/state/task-notifier.log`（JSONL，UTF-8，256KB 轮转）。关键事件：
 
-- `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、非法项 warnings
+- `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、`warnings`（非法配置）、Windows 注册结果
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
 - `observer.error`：事件处理异常（不会中断主流程）
@@ -194,7 +200,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 49 个用例全部通过（配置归一化、通知文案、重试耗尽判定、自动继续状态机、通道选择、AppleScript 转义、命令执行、AUMID 注册）。
+当前 72 个用例全部通过（配置归一化与边界、通知文案、重试耗尽判定、自动继续状态机与预算/超时、通道选择与降级标记、AppleScript 转义、命令执行、AUMID 注册、file-log 轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -215,12 +221,15 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
+- 版本策略：行为变更递增 minor/patch（当前 `0.1.1`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 
 - **Windows Toast** 依赖 PowerShell 5.1 与系统通知设置；企业镜像禁用通知时只会有日志。
 - **Windows 10（build < 22000）** 对未打包应用的 AUMID 要求存在对应的开始菜单快捷方式；若发现通知仍显示 “Windows PowerShell”，可在开始菜单创建指向本插件 `assets\tray.ico` 的快捷方式，或接受回退身份（通知本身不受影响）。Windows 11 使用 HKCU 注册项即可生效（本机已验证）。
 - 通知是异步 fire-and-forget，不保证在进程退出前送达（headless 极短任务可能只看到 `notification.dispatch`）。
+- 默认不把模型输出预览写进通知（`includePreview: false`）；开启后内容会出现在锁屏/通知中心，敏感场景请保持关闭。
+- 若 `turn/end` 之后 inbox 已有下一轮条目，自动继续会被跳过（`next-turn-pending`）——会话本身会继续跑，不需要额外提示；若 provider 要求等待超过 120s（`providerRetryAfterMs`），同样跳过，避免无效续跑。
 - `channel: windows` 只在 Windows 生效；其他平台请用 `auto` 或 `log`。
 - 自动继续只处理“模型请求重试耗尽”这一类失败；`AUTH`、`UNKNOWN`、用户取消等不会继续。
 - 如果用户在失败后立刻手动输入，插件检测到待处理的**用户输入**会跳过继续，可能表现为“没有自动继续”（属于预期保护）；后台任务通知、时间快照等系统消息不会阻止继续。

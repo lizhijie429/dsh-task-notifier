@@ -80,3 +80,27 @@ test('defaultConfig uses the platform separator of the supplied directory', () =
   assert.equal(windows.logFile, 'C:\\Users\\me\\.dsh\\plugins\\dsh-task-notifier\\state\\task-notifier.log')
   assert.equal(posix.logFile, '/home/me/.dsh/plugins/dsh-task-notifier/state/task-notifier.log')
 })
+
+test('privacy and provider-retry defaults are safe', () => {
+  const { config } = normalizeConfig(undefined, '/p')
+  assert.equal(config.includePreview, false)
+  assert.equal(config.autoContinue.respectProviderRetryAfter, true)
+})
+
+test('maxAttempts accepts the documented hard limit of 50', () => {
+  const { config, warnings } = normalizeConfig({ autoContinue: { maxAttempts: 50 } }, '/p')
+  assert.deepEqual(warnings, [])
+  assert.equal(config.autoContinue.maxAttempts, 50)
+})
+
+test('relative logFile resolves against the plugin directory', () => {
+  const { config, warnings } = normalizeConfig({ logFile: 'state/custom.log' }, 'C:\\plugins\\task-notifier')
+  assert.deepEqual(warnings, [])
+  assert.equal(config.logFile, 'C:\\plugins\\task-notifier\\state\\custom.log')
+})
+
+test('null logFile disables logging with a warning', () => {
+  const { config, warnings } = normalizeConfig({ logFile: null }, '/p')
+  assert.equal(config.logFile, false)
+  assert.ok(warnings.some((warning) => warning.includes('logFile')))
+})

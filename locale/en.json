@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "DSH Task Notifier",
+    "description": "Desktop notifications for DSH turns, plus an automatic 继续 prompt after exhausted model-request retries."
+  }
+}

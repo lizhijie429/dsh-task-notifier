@@ -124,15 +124,17 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
 | `windowsAppName` | `DSH` | App display name for Windows toasts |
 | `maxBodyChars` | `240` | Body truncation length (60–2000) |
-| `logFile` | `<plugin dir>/state/task-notifier.log` | JSONL debug log; rotates at 256 KB to `.1` |
+| `includePreview` | `false` | Include the model-output preview in notifications (off by default: lock-screen privacy) |
+| `logFile` | `<plugin dir>/state/task-notifier.log` | JSONL debug log; relative paths resolve against the plugin dir; rotates at 256 KB to `.1` |
 | `autoContinue.enabled` | `true` | Allow automatic continuation |
 | `autoContinue.message` | `继续` | User message sent automatically |
 | `autoContinue.maxAttempts` | `3` | Max continuations per task (hard cap 50) |
 | `autoContinue.cooldownMs` | `5000` | Min gap between two continuations; `0` = immediate |
 | `autoContinue.requireRetryExhausted` | `true` | Only continue on exhausted model-retry budgets |
+| `autoContinue.respectProviderRetryAfter` | `true` | Honor `providerRetryAfterMs` as a minimum wait (>120 s skips the continuation) |
 | `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT` | Failure codes treated as retryable |
 
-Invalid configuration never throws: each field falls back to its default and the warnings are summarized in the `plugin.mounted` log entry.
+Invalid configuration never throws: each field falls back to its default, the warnings go to the Host log and to the debug log as `config.warning` events, and `plugin.mounted` carries them in a `warnings` field.
 
 ## Decision logic
 
@@ -148,26 +150,30 @@ Invalid configuration never throws: each field falls back to its default and the
    - the turn must contain `llm/retry` events and the last one must satisfy `retry >= maxRetries` (normal-mode budget exhausted);
    - with no `llm/retry` events the first request failed outright (`maxRetries: 0` or a transient failure), which also counts as exhausted;
    - `always` mode never "exhausts", so it never triggers auto-continue;
+   - a failure carrying `providerRetryAfterMs` delays the continuation by that amount; delays over 120 s skip it (`autoContinue.respectProviderRetryAfter`);
    - with `requireRetryExhausted: false` every `error` attempts a continuation (more aggressive; not the default).
 4. **Where continuation is admitted**: on the `agent/status` `idle` edge, via `agent.followup()` — not inside the `turn/end` listener.
    - Reason: `Session.append()` forbids re-entrant appends while `turn/end` is being published; `followup` writes inbox events, so calling it directly throws.
    - The `idle` edge is also what the built-in goal-round driver uses. Enqueuing there keeps `agent.whenIdle()` unresolved until the continuation turn runs, so headless runs also finish the continuation turn.
+   - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
 5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
 
 ### Safety rails
 
 - `maxAttempts` defaults to 3, hard cap 50.
-- `cooldownMs` defaults to 5 s, preventing a tight "fail → continue → fail" loop.
-- Continuation is skipped (and recorded in the `auto-continue.skipped` log) when: the plugin is disabled, the failure is not retry exhaustion, attempts are used up, the agent left the registry, or the inbox already holds **user input**.
+- `cooldownMs` defaults to 5 s, preventing a tight "fail → continue → fail" loop; `providerRetryAfterMs` can extend the wait.
+- **An attempt is consumed only after `followup()` actually succeeds.** Skips (agent gone, pending human input, queued next turn, superseded by a new turn) leave the budget untouched, and the notification says "queued" rather than "sent".
+- Continuation is skipped when: the plugin is disabled, the failure is not retry exhaustion, attempts are used up, the agent left the registry, the inbox already holds **user input** or a next-turn entry, the provider asks to wait too long, or there is no turn context. Skip reasons are written to the debug log.
 - A **new human message** or a successful `completed` turn resets the continuation budget.
 - Per-session state is cleaned up on `session/disposed` or plugin unload; timers carry a generation check to ignore stale callbacks.
-- Subagent sessions are silent by default (`notifySubagents: false`).
+- Subagent sessions are silent by default (`notifySubagents: false`) and never auto-continue.
+- Unknown `turn/end` reason kinds (e.g. `forked`) are not reported as success.
 
 ## Notification channels
 
 | Platform | Implementation | Notes |
 | --- | --- | --- |
-| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`, WinRT Toast first, tray balloon fallback | Title/body travel via the `DSH_NOTIFY_TITLE` / `DSH_NOTIFY_BODY` environment variables, avoiding command-line escaping. **The notification identity is DSH**: on mount the plugin registers `DisplayName` + `IconUri` (icon = `assets/tray.ico`) under `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`, so the toast header shows the DSH icon/name. If registration fails or an older mount passes no AUMID, the script probes that registry key and only then falls back to the Windows PowerShell identity. Focus Assist/notification settings may mute it. |
+| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`, WinRT Toast first, tray balloon fallback | Title/body travel via the `DSH_NOTIFY_TITLE` / `DSH_NOTIFY_BODY` environment variables, avoiding command-line escaping; C0 control characters (illegal in XML 1.0) are stripped first so `LoadXml` cannot throw. **The notification identity is DSH**: on mount the plugin registers `DisplayName` + `IconUri` (icon = `assets/tray.ico`) under `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`, so the toast header shows the DSH icon/name; the banner image uses `assets/icon.png` because WinRT `appLogoOverride` does not accept `.ico`. If registration fails or an older mount passes no AUMID, the script probes that registry key and only then falls back to the Windows PowerShell identity. Focus Assist/notification settings may mute it. |
 | macOS | `osascript -e 'display notification …'` | Scripts must be allowed to send notifications |
 | Linux | `notify-send title body` | Requires a desktop notification daemon |
 | log / none | Log only / fully silent | For debugging or CI |
@@ -178,7 +184,7 @@ Notifications are **best-effort**: a failure never affects task execution; it is
 
 Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation). Key events:
 
-- `plugin.mounted` / `plugin.unmounted`: mount info, final config, invalid-field warnings
+- `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
 - `observer.error`: event-handling exceptions (never break the main flow)
@@ -192,7 +198,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 49 cases currently pass (config normalization, notification copy, retry-exhaustion detection, the auto-continue state machine, channel selection, AppleScript escaping, command execution, AUMID registration).
+All 72 cases currently pass (config normalization and bounds, notification copy, retry-exhaustion detection, the auto-continue state machine with budget/timeout paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration, file-log rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -213,12 +219,15 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
+- Release policy: bump the version for behavior changes (currently `0.1.1`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
 - **Windows Toast** depends on PowerShell 5.1 and system notification settings; on enterprise images that disable notifications only the log is written.
 - **Windows 10 (build < 22000)** requires a Start-menu shortcut for an unpackaged app's AUMID. If toasts still show "Windows PowerShell", create a Start-menu shortcut pointing at this plugin's `assets\tray.ico`, or accept the fallback identity (the notification itself still works). Windows 11 works with the HKCU registration alone (verified on this machine).
 - Notifications are asynchronous fire-and-forget; delivery is not guaranteed before the process exits (very short headless tasks may only show `notification.dispatch`).
+- The model-output preview is omitted by default (`includePreview: false`); enabling it puts that text on the lock screen/notification center, so keep it off for sensitive work.
+- Auto-continue is skipped when the inbox already holds a next-turn entry (`next-turn-pending`; the session continues on its own) or when the provider asks to wait more than 120 s (`providerRetryAfterMs`), to avoid pointless retries.
 - `channel: windows` only works on Windows; use `auto` or `log` elsewhere.
 - Auto-continue only handles "model-request retries exhausted" failures; `AUTH`, `UNKNOWN`, user aborts, etc. never continue.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.

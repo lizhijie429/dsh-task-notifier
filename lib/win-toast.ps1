@@ -2,9 +2,9 @@
 #
 # Input is passed through the environment (not the command line) so arbitrary
 # session titles / model output cannot break PowerShell quoting:
-#   DSH_NOTIFY_TITLE, DSH_NOTIFY_BODY, DSH_NOTIFY_SILENT (optional "1")
+#   DSH_NOTIFY_TITLE, DSH_NOTIFY_BODY
 #   DSH_NOTIFY_AUMID (optional)  - registered AppUserModelID to render as DSH
-#   DSH_NOTIFY_ICON  (optional)  - .ico/.png used as the toast logo
+#   DSH_NOTIFY_ICON  (optional)  - raster image used as the toast banner artwork
 #
 # Exit codes: 0 toast shown, 1 toast unavailable (caller falls back to logging).
 # A tray balloon is attempted before giving up on older/blocked toast stacks.
@@ -15,6 +15,13 @@ $title = $env:DSH_NOTIFY_TITLE
 if ([string]::IsNullOrWhiteSpace($title)) { $title = 'DSH' }
 $body = $env:DSH_NOTIFY_BODY
 if ($null -eq $body) { $body = '' }
+
+# XML 1.0 rejects most C0 control characters and SecurityElement::Escape does
+# not remove them: one stray ESC byte would make LoadXml throw and drop the
+# branded toast. Strip them before escaping (TAB/LF/CR survive and are escaped).
+$controlPattern = '[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]'
+$title = $title -replace $controlPattern, ' '
+$body = $body -replace $controlPattern, ' '
 
 $escapedTitle = [System.Security.SecurityElement]::Escape($title)
 $escapedBody = [System.Security.SecurityElement]::Escape($body)

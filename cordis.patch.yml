@@ -20,6 +20,8 @@
         channel: auto
         titlePrefix: DSH
         maxBodyChars: 240
+        # Keep model output out of OS notifications (lock-screen privacy).
+        includePreview: false
         # Retry-exhausted model failures re-submit this prompt to the same agent.
         autoContinue:
           enabled: true
@@ -27,3 +29,5 @@
           maxAttempts: 3
           cooldownMs: 5000
           requireRetryExhausted: true
+          # Honor providerRetryAfterMs (e.g. 429 rate limits) before retrying.
+          respectProviderRetryAfter: true
