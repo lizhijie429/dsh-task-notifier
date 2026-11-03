@@ -94,9 +94,15 @@ test('maxAttempts accepts the documented hard limit of 50', () => {
 })
 
 test('relative logFile resolves against the plugin directory', () => {
-  const { config, warnings } = normalizeConfig({ logFile: 'state/custom.log' }, 'C:\\plugins\\task-notifier')
-  assert.deepEqual(warnings, [])
-  assert.equal(config.logFile, 'C:\\plugins\\task-notifier\\state\\custom.log')
+  const windows = normalizeConfig({ logFile: 'state/custom.log' }, 'C:\\plugins\\task-notifier')
+  assert.deepEqual(windows.warnings, [])
+  assert.equal(windows.config.logFile, 'C:\\plugins\\task-notifier\\state\\custom.log')
+  const posix = normalizeConfig({ logFile: 'state/custom.log' }, '/plugins/task-notifier')
+  assert.equal(posix.config.logFile, '/plugins/task-notifier/state/custom.log')
+  const nested = normalizeConfig({ logFile: 'logs\\nested\\x.jsonl' }, '/plugins/task-notifier')
+  assert.equal(nested.config.logFile, '/plugins/task-notifier/logs/nested/x.jsonl')
+  const absolute = normalizeConfig({ logFile: '/var/log/x.jsonl' }, '/plugins/task-notifier')
+  assert.equal(absolute.config.logFile, '/var/log/x.jsonl')
 })
 
 test('null logFile disables logging with a warning', () => {
