@@ -25,10 +25,13 @@ import { registerWindowsAppId, resolveWindowsIconPath, resolveWindowsImagePath }
 /** Cordis plugin name. */
 export const name = 'task-notifier'
 
-// No required services: notifications work without the Agent registry, and a
-// profile without `agents` must still mount the plugin. The registry is
-// resolved lazily per idle edge so a service that appears after mount still
-// enables auto-continue.
+/**
+ * The live Agent registry is required: Cordis only exposes a service to plugins
+ * that inject it. Without this injection `ctx.agents`/`ctx.get('agents')` stay
+ * undefined and every continuation is skipped as `agent-gone` (observed
+ * 2026-11-04: `agentsAvailable:false` broke auto-continue for all failures).
+ */
+export const inject = ['agents']
 
 const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
 

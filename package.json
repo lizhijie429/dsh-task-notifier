@@ -1,7 +1,7 @@
 {
   "name": "@lizhijie429/dsh-task-notifier",
-  "version": "0.2.0",
-  "description": "DSH Host plugin: monitor agent turn status, send OS notifications (Windows toasts branded with the DSH icon), and auto-continue after exhausted model-request retries.",
+  "version": "0.2.1",
+  "description": "DSH Host plugin: monitor agent turn status, send OS notifications (Windows toasts branded with the DSH icon), and auto-continue network/model-request failures.",
   "type": "module",
   "main": "index.mjs",
   "exports": {

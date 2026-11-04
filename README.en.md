@@ -60,7 +60,7 @@ The `desktop` profile is owned by the Electron app, so `dsh plugin` / `--dump-co
           message: 继续
           maxAttempts: 3
           cooldownMs: 5000
-          requireRetryExhausted: true
+          requireRetryExhausted: false
 ```
 
 - `name` must be an **absolute path** (or a file URL). A package name also works, but the package must be a dependency of the profile.
@@ -130,9 +130,9 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `autoContinue.message` | `继续` | User message sent automatically |
 | `autoContinue.maxAttempts` | `3` | Max continuations per task (hard cap 50) |
 | `autoContinue.cooldownMs` | `5000` | Min gap between two continuations; `0` = immediate |
-| `autoContinue.requireRetryExhausted` | `true` | Only continue on exhausted model-retry budgets |
+| `autoContinue.requireRetryExhausted` | `false` | `false` by default: network/model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, the provider's `PI_AI_ERROR`, …) always continue; `true` restricts continuation to exhausted retry budgets |
 | `autoContinue.respectProviderRetryAfter` | `true` | Honor `providerRetryAfterMs` as a minimum wait (>120 s skips the continuation) |
-| `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT` | Failure codes treated as retryable |
+| `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT,PI_AI_ERROR,AI_ERROR,PROVIDER,MODEL,OVERLOADED,NETWORK,CONNECTION,ECONNRESET,ECONNREFUSED,ETIMEDOUT,ENOTFOUND,EAI_AGAIN,SOCKET` | Failure codes treated as continuable (network / model-request class) |
 
 Invalid configuration never throws: each field falls back to its default, the warnings go to the Host log and to the debug log as `config.warning` events, and `plugin.mounted` carries them in a `warnings` field. Unknown keys (typos in a hand-written patch) are reported too instead of being silently ignored.
 
@@ -145,13 +145,12 @@ Invalid configuration never throws: each field falls back to its default, the wa
    - `aborted` → ⏹️ task cancelled (optional; cancellation cause)
    - `blocked` → ⛔ task blocked
    - `max-tokens` → ⚠️ task hit the output limit
-3. **"Exhausted model-request retries" test** (`lib/format.mjs#isRetryExhaustedFailure`):
-   - the failure must be an `error` whose code is in `retryableCodes`;
-   - the turn must contain `llm/retry` events and the last one must satisfy `retry >= maxRetries` (normal-mode budget exhausted);
-   - with no `llm/retry` events the first request failed outright (`maxRetries: 0` or a transient failure), which also counts as exhausted;
-   - `always` mode never "exhausts", so it never triggers auto-continue;
-   - a failure carrying `providerRetryAfterMs` delays the continuation by that amount; delays over 120 s skip it (`autoContinue.respectProviderRetryAfter`);
-   - with `requireRetryExhausted: false` every `error` attempts a continuation (more aggressive; not the default).
+3. **Whether a failure earns a continuation** (`lib/observer.mjs#decideContinuation`):
+   - the failure must be an `error` whose code is in `retryableCodes`; anything else is skipped with "the failure is not a continuable type" (`AUTH`, `UNKNOWN`, … never continue);
+   - `requireRetryExhausted` defaults to `false`: network and model-request failures continue right away (e.g. `TRANSPORT: Connection error.` and the provider's `PI_AI_ERROR`) — this is what the desktop profile relies on;
+   - with `requireRetryExhausted: true` the stricter rule applies: the turn must contain `llm/retry` events and the last one must satisfy `retry >= maxRetries` (normal-mode budget exhausted); with no `llm/retry` events the first request failed outright (`maxRetries: 0` or a transient failure), which also counts as exhausted;
+   - `always` mode never "exhausts", so it never triggers auto-continue in strict mode;
+   - a failure carrying `providerRetryAfterMs` delays the continuation by that amount; delays over 120 s skip it (`autoContinue.respectProviderRetryAfter`).
 4. **Where continuation is admitted**: on the `agent/status` `idle` edge, via `agent.followup()` — not inside the `turn/end` listener.
    - Reason: `Session.append()` forbids re-entrant appends while `turn/end` is being published; `followup` writes inbox events, so calling it directly throws.
    - The `idle` edge is also what the built-in goal-round driver uses. Enqueuing there keeps `agent.whenIdle()` unresolved until the continuation turn runs, so headless runs also finish the continuation turn.
@@ -162,7 +161,7 @@ Invalid configuration never throws: each field falls back to its default, the wa
 ### Integration with current DSH
 
 - **Display metadata**: `locale/en.json` and `locale/zh.json` provide `meta.title`/`meta.description`, and `exports["./icon"]` exposes `assets/icon.png`; Plugin Manager / Settings show the name, description and icon without activating the plugin.
-- **No required services**: the plugin declares no `inject`; the Agent registry is resolved lazily on the idle edge, so profiles without `agents` still mount and notify (auto-continue is skipped).
+- **Required `agents` service**: Cordis only exposes a service to plugins that declare it in `inject`; the plugin declares `inject: ['agents']` to read the Agent registry. 0.2.0 had dropped that injection, so every continuation was skipped as `agent-gone`; 0.2.1 restores it.
 - **Session titles**: subscribes to durable `session/title`; the notification's session label prefers the Host-generated title, then the human prompt summary, then the cwd folder name.
 - **No `Config` schema by design**: the official schema depends on `@deepseek-ai/schemastery`, which would break zero-dependency mounting from an arbitrary path; configuration stays patch-driven with runtime normalization (bounds + unknown-key warnings).
 - **No custom session event types**: reads only the existing `turn/start`, `step/start`, `llm/retry`, `session/title`, `turn/end` events and never appends new ones, honoring DSH's "the session log is the only source of truth".
@@ -208,7 +207,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 77 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy, session-title labels, retry-exhaustion detection, the auto-continue state machine with budget/timeout/deferred-admit paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration and OEM-code-page decoding, file-log rotation).
+All 79 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy, session-title labels, network/model-request continuability, the auto-continue state machine with budget/timeout/deferred-admit paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration and OEM-code-page decoding, file-log rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -229,7 +228,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.2.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.2.1`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -239,7 +238,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The model-output preview is omitted by default (`includePreview: false`); enabling it puts that text on the lock screen/notification center, so keep it off for sensitive work.
 - Auto-continue is skipped when the inbox already holds a next-turn entry (`next-turn-pending`; the session continues on its own) or when the provider asks to wait more than 120 s (`providerRetryAfterMs`), to avoid pointless retries.
 - `channel: windows` only works on Windows; use `auto` or `log` elsewhere.
-- Auto-continue only handles "model-request retries exhausted" failures; `AUTH`, `UNKNOWN`, user aborts, etc. never continue.
+- Auto-continue covers network and model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, `PI_AI_ERROR`, …); `AUTH`, `UNKNOWN` and user aborts never continue. With `requireRetryExhausted: true` only exhausted-retry failures continue.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
 - No `Config` schema is declared (to stay dependency-free), so Settings has no graphical form for this plugin; edit the profile's `cordis.patch.yml` instead.

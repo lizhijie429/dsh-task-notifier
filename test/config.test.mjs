@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { normalizeConfig, defaultConfig } from '../lib/config.mjs'
 
@@ -33,7 +33,7 @@ test('patch config overrides defaults without losing sibling fields', () => {
   assert.equal(config.autoContinue.maxAttempts, 1)
   // Unspecified nested fields keep their defaults.
   assert.equal(config.autoContinue.cooldownMs, 5000)
-  assert.equal(config.autoContinue.requireRetryExhausted, true)
+  assert.equal(config.autoContinue.requireRetryExhausted, false, 'network/model failures continue by default')
 })
 
 test('invalid values fall back to defaults and report warnings', () => {
@@ -57,6 +57,19 @@ test('invalid values fall back to defaults and report warnings', () => {
     'SERVER',
     'TIMEOUT',
     'TRANSPORT',
+    'PI_AI_ERROR',
+    'AI_ERROR',
+    'PROVIDER',
+    'MODEL',
+    'OVERLOADED',
+    'NETWORK',
+    'CONNECTION',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'SOCKET',
   ])
   assert.equal(config.logFile, false)
   assert.ok(warnings.length >= 4)

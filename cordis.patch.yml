@@ -22,12 +22,13 @@
         maxBodyChars: 240
         # Keep model output out of OS notifications (lock-screen privacy).
         includePreview: false
-        # Retry-exhausted model failures re-submit this prompt to the same agent.
+        # Network / model-request failures re-submit this prompt to the same
+        # agent. `requireRetryExhausted: true` narrows it to exhausted budgets.
         autoContinue:
           enabled: true
           message: 继续
           maxAttempts: 3
           cooldownMs: 5000
-          requireRetryExhausted: true
+          requireRetryExhausted: false
           # Honor providerRetryAfterMs (e.g. 429 rate limits) before retrying.
           respectProviderRetryAfter: true

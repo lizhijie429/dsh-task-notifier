@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict'
+import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { normalizeConfig } from '../lib/config.mjs'
 import { TaskObserver, createPluginMessage, inboxBusy } from '../lib/observer.mjs'
@@ -184,14 +184,50 @@ test('non-retryable failure is reported without continuing', async () => {
   const harness = makeObserver({ agent })
   harness.session = makeSession()
   const { notifications } = await driveFailure(harness, { turn: 1, retries: [], code: 'AUTH' })
-  assert.match(notifications[0].body, /未自动继续：非模型请求重试耗尽/)
+  assert.match(notifications[0].body, /未自动继续：失败不属于可继续的类型/)
   await goIdle(harness)
   assert.equal(calls.length, 0)
 })
 
-test('an unfinished retry budget is not treated as exhausted', async () => {
+test('a transport failure without any retry event still continues', async () => {
+  // 2026-11-04: the network dropped before the model answered; the turn ended
+  // with TRANSPORT after the built-in retry budget, so the continuation must be
+  // admitted even with `requireRetryExhausted` off and no llm/retry evidence.
   const { agent, calls } = makeAgent()
   const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, {
+    turn: 1,
+    retries: [],
+    code: 'TRANSPORT',
+    message: 'Connection error.',
+  })
+  assert.match(notifications[0].body, /已排队「继续」（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1)
+})
+
+test('a provider model-request failure without retries continues', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, {
+    turn: 1,
+    retries: [],
+    code: 'PI_AI_ERROR',
+    message: 'rpc error: code = Unknown',
+  })
+  assert.match(notifications[0].body, /已排队「继续」（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1)
+})
+
+test('an unfinished retry budget is not treated as exhausted', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({
+    agent,
+    config: makeConfig({ autoContinue: { requireRetryExhausted: true } }),
+  })
   harness.session = makeSession()
   const { notifications } = await driveFailure(harness, { turn: 1, retries: [2], maxRetries: 5 })
   assert.match(notifications[0].body, /非模型请求重试耗尽/)
@@ -448,7 +484,10 @@ test('subagent turns never auto-continue even when notifications are enabled', a
 
 test('retries from another turn do not influence the decision', async () => {
   const { agent, calls } = makeAgent()
-  const harness = makeObserver({ agent })
+  const harness = makeObserver({
+    agent,
+    config: makeConfig({ autoContinue: { requireRetryExhausted: true } }),
+  })
   harness.session = makeSession()
   harness.observer.onSessionEvent(harness.session, turnStart(1))
   harness.observer.onSessionEvent(harness.session, retryEvent(1, 5, 5))
