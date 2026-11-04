@@ -23,7 +23,7 @@ dsh-task-notifier/
 │   ├── notify.mjs         # 通道选择、命令执行、macOS AppleScript 构造
 │   ├── win-appid.mjs      # Windows 通知身份（AUMID）注册与 DSH 图标定位
 │   ├── win-toast.ps1      # Windows Toast（WinRT）+ 托盘气泡兜底
-│   ├── file-log.mjs       # JSONL 调试日志（256KB 轮转）
+│   ├── file-log.mjs       # JSONL 调试日志（批量写入 + 256KB 轮转）
 │   └── observer.mjs       # 每个会话的 turn 状态机 + 自动继续
 ├── assets/
 │   ├── tray.ico           # 通知身份图标（Shell 图标）
@@ -180,6 +180,9 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - 错误通知里“已排队「继续」/未自动继续”**始终保留**（排在原因之前，长 provider 错误不会把它截掉）。
 - 以下情况跳过继续：插件禁用、失败码不在可继续集合、严格模式下非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有**用户输入**、inbox 已有下一轮条目、provider 要求等待过久、严格模式下缺少轮次上下文（`no-turn-context`）。跳过原因会写入调试日志。
 - 通知队列上限 20：队列满时优先丢弃最旧的 `step`/`start` 通知，完成/失败等终态通知不丢；进度类 Toast 超时 6s，终态 12s。
+- 调试日志批量写入：行先进入内存缓冲，下一 tick / 累积 200 行 / 插件卸载时批量落盘（`log.flush()`），轮转按写块检查，避免每个事件一次同步 I/O。
+- Windows Toast 超时会用 `taskkill /T /F` 终止整棵子进程树（避免 PowerShell/conhost 残留）；Linux `notify-send` 的应用名取 `titlePrefix`（默认 `DSH`）。
+- 同一进程只允许一个实例：profile patch 重复 insert 同一 id 时，后挂载的实例直接跳过并告警，避免双倍通知/双倍自动继续。
 - 用户发来**新的人类消息**或任务成功完成时，自动继续预算重置。
 - 每个会话状态在 `session/disposed` 或插件卸载时清理；定时器带 generation 校验，避免过期回调。
 - 子代理会话默认静默（`notifySubagents: false`），且**永不自动继续**。
@@ -191,14 +194,14 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | --- | --- | --- |
 | Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`，优先 WinRT Toast，失败降级托盘气泡 | 标题/正文通过环境变量 `DSH_NOTIFY_TITLE`/`DSH_NOTIFY_BODY` 传入，避免命令行转义问题；XML 1.0 不允许的 C0 控制字符会先被剥离，避免 `LoadXml` 抛错。**通知身份为 DSH**：挂载时在 `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier` 注册 `DisplayName` + `IconUri`（图标取 `assets/tray.ico`），Toast 头部显示 DSH 图标/名称；banner 图片用 `assets/icon.png`（WinRT `appLogoOverride` 不支持 `.ico`）。注册失败或旧代码未传 AUMID 时，脚本会自动探测该注册项，探测不到才退回 Windows PowerShell 身份。专注助手/通知设置可能静音。 |
 | macOS | `osascript -e 'display notification …'` | 需要允许脚本发送通知 |
-| Linux | `notify-send title body` | 需要桌面通知守护进程 |
+| Linux | `notify-send -a <titlePrefix> title body` | 需要桌面通知守护进程 |
 | log / none | 只写本地日志 / 完全静默 | 用于调试或 CI |
 
 通知是**尽力而为**：失败不会影响任务执行，只写 `notification.failed`/`notification.log` 与 DSH 日志。
 
 ## 调试日志
 
-默认：`<插件目录>/state/task-notifier.log`（JSONL，UTF-8，256KB 轮转）。关键事件：
+默认：`<插件目录>/state/task-notifier.log`（JSONL，UTF-8，256KB 轮转；先内存缓冲、批量异步落盘，插件卸载时强制 flush）。关键事件：
 
 - `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、`warnings`（非法配置）、Windows 注册结果
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
@@ -215,7 +218,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 88 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签、自动继续状态机与预算/超时/延迟入队、通知队列上限与丢弃策略、通道选择与降级标记、AppleScript 转义、命令执行、AUMID 注册与 OEM 编码解码、file-log 轮转）。
+当前 93 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签、自动继续状态机与预算/超时/延迟入队、通知队列上限与丢弃策略、重复挂载保护、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -236,7 +239,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.2.2`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.2.3`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 

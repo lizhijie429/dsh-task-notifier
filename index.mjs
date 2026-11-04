@@ -36,6 +36,14 @@ export const inject = ['agents']
 const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
 
 /**
+ * Process-wide mount latch. A profile patch that inserts the same id twice
+ * would otherwise mount two observers and emit every notification twice.
+ * `Symbol.for` survives module reloads, so a hot-reloaded instance that is
+ * applied before the old disposer runs is still rejected.
+ */
+const MOUNT_KEY = Symbol.for('dsh-task-notifier.mount')
+
+/**
  * Mount the turn observer.
  * @param {any} ctx - Cordis context of the profile/host plugin tree.
  * @param {unknown} rawConfig - the `config:` block of the loader entry.
@@ -49,6 +57,11 @@ export function apply(ctx, rawConfig) {
     } catch {
       // Logging is best effort; the observer must keep working.
     }
+  }
+
+  if (globalThis[MOUNT_KEY] !== undefined) {
+    log('warn', 'another task-notifier instance is already mounted in this process; skipping the duplicate mount')
+    return
   }
 
   const { config, warnings } = normalizeConfig(rawConfig, PLUGIN_DIR)
@@ -132,6 +145,9 @@ export function apply(ctx, rawConfig) {
     `mounted (channel=${notifier.channel}, autoContinue=${config.autoContinue.enabled ? `on/${config.autoContinue.maxAttempts}` : 'off'})`,
   )
 
+  const mountToken = {}
+  globalThis[MOUNT_KEY] = mountToken
+
   ctx.effect(() => {
     const offSession = ctx.on('session/event', (session, event) => {
       try {
@@ -165,6 +181,9 @@ export function apply(ctx, rawConfig) {
       offDisposed?.()
       observer.dispose()
       fileLog('plugin.unmounted', { pid: process.pid })
+      // Buffered JSONL lines must land before the process may drop the plugin.
+      fileLog.flush?.()
+      if (globalThis[MOUNT_KEY] === mountToken) delete globalThis[MOUNT_KEY]
     }
   }, 'task-notifier.lifecycle()')
 }

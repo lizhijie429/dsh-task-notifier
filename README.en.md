@@ -21,7 +21,7 @@ dsh-task-notifier/
 │   ├── notify.mjs         # channel selection, command execution, AppleScript builder
 │   ├── win-appid.mjs      # Windows notification identity (AUMID) registration + icon lookup
 │   ├── win-toast.ps1      # Windows Toast (WinRT) with tray-balloon fallback
-│   ├── file-log.mjs       # JSONL debug log (256 KB rotation)
+│   ├── file-log.mjs       # JSONL debug log (batched writes + 256 KB rotation)
 │   └── observer.mjs       # per-session turn state machine + auto-continue
 ├── assets/
 │   ├── tray.ico           # notification identity icon (shell icon)
@@ -178,6 +178,9 @@ Invalid configuration never throws: each field falls back to its default, the wa
 - Continuation is skipped when: the plugin is disabled, the code is not continuable, strict mode has no exhausted retries, attempts are used up, the agent left the registry, the inbox already holds **user input** or a next-turn entry, the provider asks to wait too long, or strict mode has no turn context. Skip reasons are written to the debug log.
 - The "queued `继续` / not continued" outcome is **always kept** in the error body (placed before the reason, so a verbose provider error cannot truncate it).
 - Notification queue cap 20: when full, the oldest `step`/`start` entry is dropped first; terminal notifications are never dropped before progress ones. Progress toasts time out after 6 s, terminal ones after 12 s.
+- Debug-log writes are batched: lines are buffered, then flushed on the next tick, at 200 lines, or on plugin unload (`log.flush()`), with rotation checked per write chunk — no synchronous I/O per session event.
+- A timed-out Windows toast kills the whole child tree with `taskkill /T /F` (no PowerShell/conhost leftovers); the Linux `notify-send` application name comes from `titlePrefix` (default `DSH`).
+- One instance per process: when a profile patch inserts the same id twice, the later mount is skipped with a warning so notifications and continuations cannot be doubled.
 - A **new human message** or a successful `completed` turn resets the continuation budget.
 - Per-session state is cleaned up on `session/disposed` or plugin unload; timers carry a generation check to ignore stale callbacks.
 - Subagent sessions are silent by default (`notifySubagents: false`) and never auto-continue.
@@ -189,14 +192,14 @@ Invalid configuration never throws: each field falls back to its default, the wa
 | --- | --- | --- |
 | Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`, WinRT Toast first, tray balloon fallback | Title/body travel via the `DSH_NOTIFY_TITLE` / `DSH_NOTIFY_BODY` environment variables, avoiding command-line escaping; C0 control characters (illegal in XML 1.0) are stripped first so `LoadXml` cannot throw. **The notification identity is DSH**: on mount the plugin registers `DisplayName` + `IconUri` (icon = `assets/tray.ico`) under `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`, so the toast header shows the DSH icon/name; the banner image uses `assets/icon.png` because WinRT `appLogoOverride` does not accept `.ico`. If registration fails or an older mount passes no AUMID, the script probes that registry key and only then falls back to the Windows PowerShell identity. Focus Assist/notification settings may mute it. |
 | macOS | `osascript -e 'display notification …'` | Scripts must be allowed to send notifications |
-| Linux | `notify-send title body` | Requires a desktop notification daemon |
+| Linux | `notify-send -a <titlePrefix> title body` | Requires a desktop notification daemon |
 | log / none | Log only / fully silent | For debugging or CI |
 
 Notifications are **best-effort**: a failure never affects task execution; it is only recorded as `notification.failed`/`notification.log` and in the DSH log.
 
 ## Debug log
 
-Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation). Key events:
+Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; lines are buffered and flushed in batches, forced on plugin unload). Key events:
 
 - `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
@@ -213,7 +216,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 88 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and drop policy, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration and OEM-code-page decoding, file-log rotation).
+All 93 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and drop policy, duplicate-mount protection, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -234,7 +237,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.2.2`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.2.3`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 

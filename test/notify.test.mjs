@@ -40,6 +40,41 @@ test('runCommand reports spawn failures without throwing', async () => {
   assert.match(result.stderr, /boom/)
 })
 
+test('runCommand timeout terminates the helper and reports timedOut', async () => {
+  const started = Date.now()
+  const result = await runCommand(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 300 })
+  assert.equal(result.timedOut, true)
+  assert.equal(result.code, null)
+  assert.ok(Date.now() - started < 5000, 'the timeout must not wait for the helper')
+})
+
+test('linux channel passes the configured application name', async () => {
+  const invocations = []
+  const notifier = createNotifier({
+    config: { channel: 'linux', titlePrefix: 'MyPrefix' },
+    platform: 'linux',
+    run: async (command, args) => {
+      invocations.push({ command, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  await notifier.dispatch({ title: 't', body: 'b' })
+  assert.equal(invocations[0].command, 'notify-send')
+  assert.deepEqual(invocations[0].args.slice(0, 2), ['-a', 'MyPrefix'])
+
+  const fallback = []
+  const defaultNotifier = createNotifier({
+    config: { channel: 'linux' },
+    platform: 'linux',
+    run: async (command, args) => {
+      fallback.push({ command, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  await defaultNotifier.dispatch({ title: 't', body: 'b' })
+  assert.deepEqual(fallback[0].args.slice(0, 2), ['-a', 'DSH'])
+})
+
 test('log channel never shells out and reports success', async () => {
   const lines = []
   const notifier = createNotifier({
