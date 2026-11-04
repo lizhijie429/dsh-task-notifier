@@ -148,6 +148,8 @@ Invalid configuration never throws: each field falls back to its default, the wa
 3. **Whether a failure earns a continuation** (`lib/observer.mjs#decideContinuation`):
    - the failure must be an `error` whose code is in `retryableCodes`; anything else is skipped with "the failure is not a continuable type" (`AUTH`, `UNKNOWN`, … never continue);
    - `requireRetryExhausted` defaults to `false`: network and model-request failures continue right away (e.g. `TRANSPORT: Connection error.` and the provider's `PI_AI_ERROR`) — this is what the desktop profile relies on;
+   - `UNKNOWN` fallback: DSH wraps non-`LlmError` throws as `UNKNOWN`; when the message is network-shaped (`connection/network/socket/timeout/fetch failed/ECONN*/EAI_AGAIN/TLS`, …) the plugin still continues once;
+   - **mounting mid-turn**: after a hot reload the plugin never saw `turn/start`; non-strict mode continues from the durable failure code, while strict mode (`requireRetryExhausted: true`) needs the retry chain and skips with "missing turn context";
    - with `requireRetryExhausted: true` the stricter rule applies: the turn must contain `llm/retry` events and the last one must satisfy `retry >= maxRetries` (normal-mode budget exhausted); with no `llm/retry` events the first request failed outright (`maxRetries: 0` or a transient failure), which also counts as exhausted;
    - `always` mode never "exhausts", so it never triggers auto-continue in strict mode;
    - a failure carrying `providerRetryAfterMs` delays the continuation by that amount; delays over 120 s skip it (`autoContinue.respectProviderRetryAfter`).
@@ -156,6 +158,8 @@ Invalid configuration never throws: each field falls back to its default, the wa
    - The `idle` edge is also what the built-in goal-round driver uses. Enqueuing there keeps `agent.whenIdle()` unresolved until the continuation turn runs, so headless runs also finish the continuation turn.
    - The prompt is admitted one microtask after the `agent/status` listener returns: the Host must emit this turn's idle transition before the continuation turn's running transition (the reverse order makes clients treat the continuation turn as not running, so the composer keeps showing Send instead of Stop).
    - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
+6. **Notification labels**: `turn/start` no longer clears the label, so continuation turns keep the latest human prompt instead of falling back to the workspace folder name; a durable `session/title` still wins when present.
+7. **Sub-agents**: with `notifySubagents: false` (default) a sub-agent session's start/step/complete/error notifications are all suppressed; when enabled their label is `sub-agent <id> (parent <id>)`, distinguishable from the main session, and sub-agents never auto-continue.
 5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
 
 ### Integration with current DSH
@@ -171,7 +175,9 @@ Invalid configuration never throws: each field falls back to its default, the wa
 - `maxAttempts` defaults to 3, hard cap 50.
 - `cooldownMs` defaults to 5 s, preventing a tight "fail → continue → fail" loop; `providerRetryAfterMs` can extend the wait.
 - **An attempt is consumed only after `followup()` actually succeeds.** Skips (agent gone, pending human input, queued next turn, superseded by a new turn) leave the budget untouched, and the notification says "queued" rather than "sent".
-- Continuation is skipped when: the plugin is disabled, the failure is not retry exhaustion, attempts are used up, the agent left the registry, the inbox already holds **user input** or a next-turn entry, the provider asks to wait too long, or there is no turn context. Skip reasons are written to the debug log.
+- Continuation is skipped when: the plugin is disabled, the code is not continuable, strict mode has no exhausted retries, attempts are used up, the agent left the registry, the inbox already holds **user input** or a next-turn entry, the provider asks to wait too long, or strict mode has no turn context. Skip reasons are written to the debug log.
+- The "queued `继续` / not continued" outcome is **always kept** in the error body (placed before the reason, so a verbose provider error cannot truncate it).
+- Notification queue cap 20: when full, the oldest `step`/`start` entry is dropped first; terminal notifications are never dropped before progress ones. Progress toasts time out after 6 s, terminal ones after 12 s.
 - A **new human message** or a successful `completed` turn resets the continuation budget.
 - Per-session state is cleaned up on `session/disposed` or plugin unload; timers carry a generation check to ignore stale callbacks.
 - Subagent sessions are silent by default (`notifySubagents: false`) and never auto-continue.
@@ -207,7 +213,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 79 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy, session-title labels, network/model-request continuability, the auto-continue state machine with budget/timeout/deferred-admit paths, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration and OEM-code-page decoding, file-log rotation).
+All 88 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and drop policy, channel selection and degradation markers, AppleScript escaping, command execution, AUMID registration and OEM-code-page decoding, file-log rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -228,7 +234,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.2.1`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.2.2`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -238,7 +244,9 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The model-output preview is omitted by default (`includePreview: false`); enabling it puts that text on the lock screen/notification center, so keep it off for sensitive work.
 - Auto-continue is skipped when the inbox already holds a next-turn entry (`next-turn-pending`; the session continues on its own) or when the provider asks to wait more than 120 s (`providerRetryAfterMs`), to avoid pointless retries.
 - `channel: windows` only works on Windows; use `auto` or `log` elsewhere.
-- Auto-continue covers network and model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, `PI_AI_ERROR`, …); `AUTH`, `UNKNOWN` and user aborts never continue. With `requireRetryExhausted: true` only exhausted-retry failures continue.
+- Auto-continue covers network and model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, `PI_AI_ERROR`, … plus `UNKNOWN` with a network-shaped message); `AUTH`, non-network `UNKNOWN` and user aborts never continue. With `requireRetryExhausted: true` only exhausted-retry failures continue, and the turn's `turn/start` must have been observed.
+- With `notifySubagents: false` sub-agent completions/failures are not reported separately; enable it for sub-agent progress (labels carry the parent id).
+- Notifications are best-effort: when the queue is full older progress toasts are dropped, and terminal toasts can still be delayed while several sessions fail at once.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
 - No `Config` schema is declared (to stay dependency-free), so Settings has no graphical form for this plugin; edit the profile's `cordis.patch.yml` instead.

@@ -542,3 +542,115 @@ test('durable session titles label notifications', async () => {
   await flushMicrotasks()
   assert.match(harness.notifications[0].body, /Git push privacy audit/)
 })
+
+test('a plugin mounted mid-turn still continues a network failure', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  // The plugin mounted after turn/start: only the terminal event is observed.
+  harness.observer.onSessionEvent(
+    harness.session,
+    turnEnd(3, { kind: 'error', error: { code: 'TRANSPORT', message: 'Connection error.' } }),
+  )
+  await flushMicrotasks()
+  assert.match(harness.notifications[0].body, /已排队「继续」（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1)
+})
+
+test('strict retry-exhaustion mode requires the turn context it never saw', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent, config: makeConfig({ autoContinue: { requireRetryExhausted: true } }) })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(
+    harness.session,
+    turnEnd(3, { kind: 'error', error: { code: 'TRANSPORT', message: 'Connection error.' } }),
+  )
+  await flushMicrotasks()
+  assert.match(harness.notifications[0].body, /未自动继续：缺少轮次上下文/)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+})
+
+test('an UNKNOWN failure with a network-shaped message still continues', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, {
+    turn: 1,
+    retries: [],
+    code: 'UNKNOWN',
+    message: 'TypeError: fetch failed',
+  })
+  assert.match(notifications[0].body, /已排队「继续」（1\/3）/)
+  await goIdle(harness)
+  assert.equal(calls.length, 1)
+})
+
+test('an UNKNOWN failure with a non-network message does not continue', async () => {
+  const { agent, calls } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  const { notifications } = await driveFailure(harness, {
+    turn: 1,
+    retries: [],
+    code: 'UNKNOWN',
+    message: 'invalid argument',
+  })
+  assert.match(notifications[0].body, /未自动继续：失败不属于可继续的类型/)
+  await goIdle(harness)
+  assert.equal(calls.length, 0)
+})
+
+test('sub-agent start and step notifications stay silent until notifySubagents', async () => {
+  const childHeader = {
+    origin: 'subagent',
+    delegationDepth: 1,
+    cwd: '/work/project',
+    parentSession: 'session-parent-123456',
+  }
+  const { agent } = makeAgent()
+  const hidden = makeObserver({ agent, config: makeConfig({ notifyOnStart: true, notifyOnStep: true }) })
+  hidden.session = makeSession('child-1', childHeader)
+  hidden.observer.onSessionEvent(hidden.session, turnStart(1))
+  hidden.observer.onSessionEvent(hidden.session, { type: 'step/start', data: { turn: 1, step: 1 } })
+  await flushMicrotasks()
+  assert.equal(hidden.notifications.length, 0)
+
+  const visible = makeObserver({
+    agent,
+    config: makeConfig({ notifyOnStart: true, notifyOnStep: true, notifySubagents: true }),
+  })
+  visible.session = makeSession('child-1', childHeader)
+  visible.observer.onSessionEvent(visible.session, turnStart(1))
+  visible.observer.onSessionEvent(visible.session, { type: 'step/start', data: { turn: 1, step: 1 } })
+  await flushMicrotasks()
+  assert.equal(visible.notifications.length, 2)
+  assert.match(visible.notifications[0].body, /子代理 child-1/)
+  assert.match(visible.notifications[0].body, /父 /)
+})
+
+test('a continuation turn keeps the last human label', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  await driveFailure(harness, { turn: 1, retries: [5] })
+  assert.match(harness.notifications[0].body, /帮我修一下登录接口/)
+  await goIdle(harness)
+
+  // The continuation turn is driven by a producer message, not a human one.
+  harness.observer.onSessionEvent(harness.session, turnStart(2))
+  harness.observer.onSessionEvent(harness.session, {
+    type: 'user/message',
+    data: {
+      content: [{ type: 'text', text: '继续完成未完成的任务' }],
+      source: { kind: 'task-notifier', plugin: 'task-notifier' },
+    },
+  })
+  harness.observer.onSessionEvent(
+    harness.session,
+    turnEnd(2, { kind: 'error', error: { code: 'SERVER', message: 'upstream 502' } }),
+  )
+  await flushMicrotasks()
+  assert.match(harness.notifications.at(-1).body, /帮我修一下登录接口/)
+})

@@ -171,3 +171,32 @@ test('dispatches are serialized', async () => {
   await Promise.all([first, second])
   assert.deepEqual(order, ['start', 'end', 'start', 'end'])
 })
+
+test('a burst beyond the queue cap drops progress but keeps terminal notifications', async () => {
+  const runs = []
+  let release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const notifier = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    maxQueued: 2,
+    run: async () => {
+      runs.push('run')
+      await gate
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  const first = notifier.dispatch({ title: 's1', body: 'b' }, { phase: 'step' })
+  const second = notifier.dispatch({ title: 's2', body: 'b' }, { phase: 'step' })
+  const third = notifier.dispatch({ title: 's3', body: 'b' }, { phase: 'step' })
+  const terminal = notifier.dispatch({ title: 'failed', body: 'b' }, { phase: 'error' })
+  release()
+  const results = await Promise.all([first, second, third, terminal])
+  // s1 is in flight; the queue holds s2/s3; the terminal one pushes s2 out.
+  assert.equal(runs.length, 3)
+  assert.equal(results[1].ok, false)
+  assert.match(results[1].detail, /dropped/)
+  assert.equal(results[3].ok, true)
+})

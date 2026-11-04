@@ -5,6 +5,7 @@ import {
   clip,
   failureCode,
   formatDuration,
+  isNetworkFailureMessage,
   isRetryExhaustedFailure,
   messageText,
   phaseForReason,
@@ -184,4 +185,31 @@ test('failureCode ignores blank codes', () => {
   assert.equal(failureCode({ code: ' SERVER ' }), 'SERVER')
   assert.equal(failureCode({ code: '   ' }), undefined)
   assert.equal(failureCode(undefined), undefined)
+})
+
+test('isNetworkFailureMessage recognizes transport wording only', () => {
+  assert.equal(isNetworkFailureMessage({ message: 'fetch failed' }), true)
+  assert.equal(isNetworkFailureMessage({ message: 'read ECONNRESET by peer' }), true)
+  assert.equal(isNetworkFailureMessage({ message: 'request timed out' }), true)
+  assert.equal(isNetworkFailureMessage({ message: 'invalid argument' }), false)
+  assert.equal(isNetworkFailureMessage({ message: '' }), false)
+  assert.equal(isNetworkFailureMessage(undefined), false)
+})
+
+test('a verbose failure reason keeps the continuation outcome visible', () => {
+  const { body } = buildNotification({
+    phase: 'error',
+    label: '设计器应该是先设计布局，然后再布局容器中填充内容，类如我先画出三行（第一行：欢迎语，第二行：两列，第三行两列）每一行的…',
+    durationMs: 876_000,
+    steps: 20,
+    failure: {
+      code: 'PI_AI_ERROR',
+      message: 'rpc error: code = Unknown desc = Unexpected NameError: name quoted_for_log is not defined, request_id=3b5d8f58-0211-44c1-af07-12b386bc66a2',
+    },
+    autoContinue: { attempt: 1, max: 3 },
+    maxBodyChars: 240,
+  })
+  assert.ok(body.length <= 240, `body length ${body.length}`)
+  assert.match(body, /已排队「继续」（1\/3）/)
+  assert.match(body, /原因：/)
 })
