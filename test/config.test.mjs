@@ -34,6 +34,20 @@ test('patch config overrides defaults without losing sibling fields', () => {
   // Unspecified nested fields keep their defaults.
   assert.equal(config.autoContinue.cooldownMs, 5000)
   assert.equal(config.autoContinue.requireRetryExhausted, false, 'network/model failures continue by default')
+  assert.equal(config.notifyOnApproval, true, 'pending approvals are notified by default')
+  assert.equal(config.approvalGraceMs, 1000)
+})
+
+test('approval notification settings normalize and fall back', () => {
+  const custom = normalizeConfig({ notifyOnApproval: false, approvalGraceMs: 5000 }, '/p')
+  assert.equal(custom.config.notifyOnApproval, false)
+  assert.equal(custom.config.approvalGraceMs, 5000)
+
+  const invalid = normalizeConfig({ notifyOnApproval: 'yes', approvalGraceMs: -1 }, '/p')
+  assert.equal(invalid.config.notifyOnApproval, true)
+  assert.equal(invalid.config.approvalGraceMs, 1000)
+  assert.ok(invalid.warnings.some((warning) => warning.includes('notifyOnApproval')))
+  assert.ok(invalid.warnings.some((warning) => warning.includes('approvalGraceMs')))
 })
 
 test('invalid values fall back to defaults and report warnings', () => {

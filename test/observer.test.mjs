@@ -654,3 +654,97 @@ test('a continuation turn keeps the last human label', async () => {
   await flushMicrotasks()
   assert.match(harness.notifications.at(-1).body, /帮我修一下登录接口/)
 })
+
+function approvalAsked(id = 'approval-1') {
+  return {
+    type: 'approval/asked',
+    data: {
+      id,
+      toolName: 'pwsh',
+      callId: 'call-1',
+      reason: 'escalate sandbox to danger-full-access: 需要写入工作区外目录',
+    },
+  }
+}
+
+function approvalDecided(id = 'approval-1', outcome = 'allowed-once') {
+  return { type: 'approval/decided', data: { id, outcome } }
+}
+
+test('a pending approval notifies after the grace window', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 0, 'no notification inside the grace window')
+  assert.equal(harness.timers.length, 1)
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].title, /需要授权/)
+  assert.match(harness.notifications[0].body, /工具：pwsh/)
+  assert.match(harness.notifications[0].body, /原因：escalate sandbox/)
+})
+
+test('an approval answered inside the grace window stays silent', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  harness.observer.onSessionEvent(harness.session, approvalDecided())
+  await flushMicrotasks()
+  assert.equal(harness.timers.length, 0, 'the timer is cleared by the decision')
+  assert.equal(harness.notifications.length, 0)
+})
+
+test('an approval decided after the notification clears quietly', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.doesNotThrow(() => harness.observer.onSessionEvent(harness.session, approvalDecided()))
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+})
+
+test('approval notifications honour the switch and sub-agent visibility', async () => {
+  const { agent } = makeAgent()
+  const disabled = makeObserver({ agent, config: makeConfig({ notifyOnApproval: false }) })
+  disabled.session = makeSession()
+  disabled.observer.onSessionEvent(disabled.session, approvalAsked())
+  assert.equal(disabled.timers.length, 0)
+
+  const subagent = makeObserver({ agent })
+  subagent.session = makeSession('child-1', {
+    origin: 'subagent',
+    delegationDepth: 1,
+    parentSession: 'session-parent-123456',
+  })
+  subagent.observer.onSessionEvent(subagent.session, approvalAsked())
+  assert.equal(subagent.timers.length, 0, 'sub-agents stay silent unless notifySubagents is on')
+
+  const visible = makeObserver({ agent, config: makeConfig({ notifySubagents: true }) })
+  visible.session = makeSession('child-1', {
+    origin: 'subagent',
+    delegationDepth: 1,
+    parentSession: 'session-parent-123456',
+  })
+  visible.observer.onSessionEvent(visible.session, approvalAsked())
+  assert.equal(visible.timers.length, 1)
+})
+
+test('session disposal clears a pending approval timer', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  assert.equal(harness.timers.length, 1)
+  harness.observer.onSessionDisposed(harness.session)
+  assert.equal(harness.timers.length, 0)
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 0)
+})

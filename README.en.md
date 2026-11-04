@@ -7,6 +7,7 @@ A DSH (DeepSeek Harness) plugin that watches task execution (one task = one `tur
 - Notification channels: Windows Toast (PowerShell 5.1 / WinRT), macOS `osascript`, Linux `notify-send`, or plain logging.
 - **Windows toasts are branded as DSH** (registers the `DSH.TaskNotifier` AUMID), no longer "Windows PowerShell".
 - Task state is derived only from **durable session events** (`turn/start`, `llm/retry`, `turn/end`) — no guessing from live status.
+- Approval alerts: a durable `approval/asked` that is still pending after the grace window raises an OS notification; automatic decisions stay silent.
 
 ## Directory layout
 
@@ -119,6 +120,8 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `notifyOnAbort` | `false` | Notify when the user aborts (`aborted`) |
 | `notifyOnStep` | `false` | Notify on every `step/start` (debugging) |
 | `notifySubagents` | `false` | Notify subagent sessions too (main session only by default) |
+| `notifyOnApproval` | `true` | Notify when the DSH approval panel is waiting for your decision |
+| `approvalGraceMs` | `1000` | Approval grace window: approvals auto-answered within it (policy `never`, automatic grants, cancellation) stay silent |
 | `channel` | `auto` | `auto` / `windows` / `macos` / `linux` / `log` / `none` |
 | `titlePrefix` | `DSH` | Notification title prefix (≤60 chars; longer values are truncated with a warning) |
 | `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
@@ -158,9 +161,10 @@ Invalid configuration never throws: each field falls back to its default, the wa
    - The `idle` edge is also what the built-in goal-round driver uses. Enqueuing there keeps `agent.whenIdle()` unresolved until the continuation turn runs, so headless runs also finish the continuation turn.
    - The prompt is admitted one microtask after the `agent/status` listener returns: the Host must emit this turn's idle transition before the continuation turn's running transition (the reverse order makes clients treat the continuation turn as not running, so the composer keeps showing Send instead of Stop).
    - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
+5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
 6. **Notification labels**: `turn/start` no longer clears the label, so continuation turns keep the latest human prompt instead of falling back to the workspace folder name; a durable `session/title` still wins when present.
 7. **Sub-agents**: with `notifySubagents: false` (default) a sub-agent session's start/step/complete/error notifications are all suppressed; when enabled their label is `sub-agent <id> (parent <id>)`, distinguishable from the main session, and sub-agents never auto-continue.
-5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
+8. **Approval alerts**: subscribes to durable `approval/asked`; when `approval/decided` arrives inside the grace window (`approvalGraceMs`, default 1 s — policy `never` auto-reject, automatic grants, cancellation) the alert stays silent, and only a genuinely pending approval raises an OS notification (title `🔐 approval needed`, body with tool name and reason). The toast is a reminder only; approving still happens in the DSH approval panel.
 
 ### Integration with current DSH
 
@@ -204,6 +208,7 @@ Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; 
 - `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
+- `approval.asked` / `approval.notified` / `approval.decided`: approval alert grace, notification and decision
 - `agent.status`: every Agent status transition (`running`/`idle`), for diagnosing continuation-turn status ordering
 - `observer.error`: event-handling exceptions (never break the main flow)
 
@@ -216,7 +221,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 93 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and drop policy, duplicate-mount protection, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
+All 100 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels, approval alert grace/silence/cleanup, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and drop policy, duplicate-mount protection, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -237,7 +242,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.2.3`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.2.4`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -249,6 +254,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - `channel: windows` only works on Windows; use `auto` or `log` elsewhere.
 - Auto-continue covers network and model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, `PI_AI_ERROR`, … plus `UNKNOWN` with a network-shaped message); `AUTH`, non-network `UNKNOWN` and user aborts never continue. With `requireRetryExhausted: true` only exhausted-retry failures continue, and the turn's `turn/start` must have been observed.
 - With `notifySubagents: false` sub-agent completions/failures are not reported separately; enable it for sub-agent progress (labels carry the parent id).
+- Approval alerts are OS notifications only (no approve/deny buttons); the decision still happens in the DSH approval panel. Approvals auto-answered inside the grace window (policy `never`, automatic grants, cancellation) are not announced, and an approval requested before the plugin mounted is not retroactively announced.
 - Notifications are best-effort: when the queue is full older progress toasts are dropped, and terminal toasts can still be delayed while several sessions fail at once.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.

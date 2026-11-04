@@ -16,6 +16,11 @@
         notifyOnStep: false
         # Notify for sub-agent sessions too (off keeps delegation quiet).
         notifySubagents: false
+        # Notify when an approval prompt stays pending for the user.
+        notifyOnApproval: true
+        # Approvals answered within this window are treated as automatic and
+        # do not raise a notification (policy `never` answers immediately).
+        approvalGraceMs: 1000
         # auto | windows | macos | linux | log | none
         channel: auto
         titlePrefix: DSH

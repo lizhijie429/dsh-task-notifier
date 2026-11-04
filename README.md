@@ -121,6 +121,8 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `notifyOnAbort` | `false` | 用户取消（`aborted`）时是否通知 |
 | `notifyOnStep` | `false` | 每步（`step/start`）通知，调试用 |
 | `notifySubagents` | `false` | 是否通知子代理会话（默认只通知主会话） |
+| `notifyOnApproval` | `true` | DSH 审批面板需要你授权时发系统通知 |
+| `approvalGraceMs` | `1000` | 审批宽限期：在此时间内被自动回答（自动拒绝/自动通过/取消）的审批保持静默 |
 | `channel` | `auto` | `auto`/`windows`/`macos`/`linux`/`log`/`none` |
 | `titlePrefix` | `DSH` | 通知标题前缀（≤60 字符，超出截断并告警） |
 | `windowsAppId` | `DSH.TaskNotifier` | Windows Toast 的 AppUserModelID（决定通知中的应用名/图标） |
@@ -160,9 +162,10 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
    - `idle` 边也是内置 goal 轮次驱动使用的续跑时机；在此入队后 `agent.whenIdle()` 不会提前 resolve，headless 模式也能把继续的轮次跑完。
    - 「继续」不在 `agent/status` 监听器里同步发送，而是延后一个微任务：先让 Host 发出本轮 idle 状态，再启动续跑轮次的 running 状态（顺序反了会让客户端把续跑轮次误判为“未运行”，发送按钮不切换成「停止」）。
    - 若 `turn/end` 时 inbox 已有**下一轮**条目（goal/schedule/subagent-settled 等），驱动器会直接开下一轮、不经过 idle；插件此时跳过继续并记 `next-turn-pending`，避免预算被“永远发不出去”的指令消耗。
+5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
 6. **通知标签**：`turn/start` 不再清空标签，自动继续轮次保留最近一次人类 prompt（避免退化成工作区目录名）；有持久化 `session/title` 时优先使用标题。
 7. **子代理**：`notifySubagents: false`（默认）时子代理会话的 start/step/完成/失败通知**全部静默**；开启后标签为 `子代理 <id>（父 <id>）`，与主会话可区分，且子代理永不自动继续。
-5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
+8. **授权提醒**：订阅持久化 `approval/asked`；若 `approval/decided` 在宽限期（`approvalGraceMs`，默认 1s）内到达（策略 `never` 自动拒绝、自动通过、取消等），保持静默；仍处于 pending 才发系统通知（标题「🔐 需要授权」，正文含工具名与原因）。通知仅作提醒，授权本身仍需在 DSH 审批面板完成。
 
 ### 与最新 DSH 的集成
 
@@ -206,6 +209,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、`warnings`（非法配置）、Windows 注册结果
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
+- `approval.asked` / `approval.notified` / `approval.decided`：审批提醒的宽限、通知与决策结果
 - `agent.status`：每次 Agent 状态切换（`running`/`idle`），用于排查续跑轮次的状态时序
 - `observer.error`：事件处理异常（不会中断主流程）
 
@@ -218,7 +222,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 93 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签、自动继续状态机与预算/超时/延迟入队、通知队列上限与丢弃策略、重复挂载保护、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
+当前 100 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签、授权提醒的宽限/静默/清理、自动继续状态机与预算/超时/延迟入队、通知队列上限与丢弃策略、重复挂载保护、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -239,7 +243,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.2.3`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.2.4`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 
@@ -251,6 +255,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - `channel: windows` 只在 Windows 生效；其他平台请用 `auto` 或 `log`。
 - 自动继续覆盖网络与模型请求类失败（`TRANSPORT`、`TIMEOUT`、`RATE_LIMIT`、`SERVER`、`PI_AI_ERROR` 等，含 `UNKNOWN` 但信息呈网络特征的情况）；`AUTH`、`UNKNOWN` 且无网络特征、用户取消等不会继续。若把 `requireRetryExhausted` 设为 `true`，则只继续“重试预算耗尽”的失败（且要求看到本轮 `turn/start`）。
 - `notifySubagents: false` 时子代理完成/失败不会单独通知；若需要子代理进度，请开启该配置（通知标签会带父会话标识）。
+- 授权提醒只是 OS 通知，不提供“批准/拒绝”按钮；你仍需要在 DSH 审批面板完成操作。宽限期内被自动回答的审批（策略 `never`、自动通过、取消）不会通知；若插件在 `approval/asked` 之后才挂载（热加载），该次审批不会补发提醒。
 - 通知是“尽力送达”：队列满时会丢弃较旧的进度通知，多会话同时故障时终态通知仍可能排队延迟。
 - 如果用户在失败后立刻手动输入，插件检测到待处理的**用户输入**会跳过继续，可能表现为“没有自动继续”（属于预期保护）；后台任务通知、时间快照等系统消息不会阻止继续。
 - `desktop` profile 依赖 Electron 桌面端运行插件；`dsh plugin` CLI 不适用于该 profile。

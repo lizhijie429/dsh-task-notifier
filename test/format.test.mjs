@@ -213,3 +213,20 @@ test('a verbose failure reason keeps the continuation outcome visible', () => {
   assert.match(body, /已排队「继续」（1\/3）/)
   assert.match(body, /原因：/)
 })
+
+test('buildNotification renders a pending approval prompt', () => {
+  const { title, body } = buildNotification({
+    phase: 'approval',
+    label: '设计器任务',
+    approval: {
+      toolName: 'pwsh',
+      reason: 'escalate sandbox to danger-full-access: 需要写入工作区外目录',
+    },
+    titlePrefix: 'DSH',
+    maxBodyChars: 240,
+  })
+  assert.match(title, /需要授权/)
+  assert.match(body, /会话：设计器任务/)
+  assert.match(body, /工具：pwsh/)
+  assert.match(body, /原因：escalate sandbox/)
+})
