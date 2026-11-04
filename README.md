@@ -164,7 +164,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
    - 若 `turn/end` 时 inbox 已有**下一轮**条目（goal/schedule/subagent-settled 等），驱动器会直接开下一轮、不经过 idle；插件此时跳过继续并记 `next-turn-pending`，避免预算被“永远发不出去”的指令消耗。
 5. **消息来源**：自动消息 `source = { kind: 'task-notifier', plugin: 'task-notifier' }`。持久化格式 v4 明确拒绝 `kind: 'plugin'`（会报 `format v4 message requires a producer-owned source kind`），所以用插件自有的 producer kind。
 6. **通知标签**：`turn/start` 不再清空标签，自动继续轮次保留最近一次人类 prompt（避免退化成工作区目录名）；有持久化 `session/title` 时优先使用标题。
-7. **子代理**：`notifySubagents: false`（默认）时子代理会话的 start/step/完成/失败通知**全部静默**；开启后标签为 `子代理 <id>（父 <id>）`，与主会话可区分，且子代理永不自动继续。
+7. **子代理**：`notifySubagents: false`（默认）时子代理会话的 start/step/完成/失败/授权通知**全部静默**；开启后标签为 `子代理 <id>（父 <id>）`，完成通知同样带耗时/步数，与主会话可区分，且子代理永不自动继续。
 8. **授权提醒**：订阅持久化 `approval/asked`；若 `approval/decided` 在宽限期（`approvalGraceMs`，默认 1s）内到达（策略 `never` 自动拒绝、自动通过、取消等），保持静默；仍处于 pending 才发系统通知（标题「🔐 需要授权」，正文含工具名与原因）。通知仅作提醒，授权本身仍需在 DSH 审批面板完成。
 
 ### 与最新 DSH 的集成
@@ -182,10 +182,10 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - **只有 `followup()` 真正成功后才会消耗一次尝试次数**；被跳过（agent 已消失、inbox 有用户输入、下一轮待处理、被新 turn 取代）不会扣预算，通知文案也只说「已排队」。
 - 错误通知里“已排队「继续」/未自动继续”**始终保留**（排在原因之前，长 provider 错误不会把它截掉）。
 - 以下情况跳过继续：插件禁用、失败码不在可继续集合、严格模式下非重试耗尽、次数用尽、Agent 已不在注册表、inbox 已有**用户输入**、inbox 已有下一轮条目、provider 要求等待过久、严格模式下缺少轮次上下文（`no-turn-context`）。跳过原因会写入调试日志。
-- 通知队列上限 20：队列满时优先丢弃最旧的 `step`/`start` 通知，完成/失败等终态通知不丢；进度类 Toast 超时 6s，终态 12s。
+- 通知队列上限 20：队列满时按优先级丢弃——先丢最旧的 `step`/`start`，再丢 `complete`，再丢其他终态；**授权提醒最后才丢**（用户必须处理它）。进度类 Toast 超时 6s，终态 12s。
 - 调试日志批量写入：行先进入内存缓冲，下一 tick / 累积 200 行 / 插件卸载时批量落盘（`log.flush()`），轮转按写块检查，避免每个事件一次同步 I/O。
 - Windows Toast 超时会用 `taskkill /T /F` 终止整棵子进程树（避免 PowerShell/conhost 残留）；Linux `notify-send` 的应用名取 `titlePrefix`（默认 `DSH`）。
-- 同一进程只允许一个实例：profile patch 重复 insert 同一 id 时，后挂载的实例直接跳过并告警，避免双倍通知/双倍自动继续。
+- 同一进程只允许一个实例：profile patch 重复 insert 同一 id 时，后挂载的实例直接跳过并告警，避免双倍通知/双倍自动继续；若挂载失败（effect 注册抛异常）会释放闩锁，不影响后续重试。
 - 用户发来**新的人类消息**或任务成功完成时，自动继续预算重置。
 - 每个会话状态在 `session/disposed` 或插件卸载时清理；定时器带 generation 校验，避免过期回调。
 - 子代理会话默认静默（`notifySubagents: false`），且**永不自动继续**。
@@ -222,7 +222,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 100 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签、授权提醒的宽限/静默/清理、自动继续状态机与预算/超时/延迟入队、通知队列上限与丢弃策略、重复挂载保护、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
+当前 104 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签（含完成耗时/步数）、授权提醒的宽限/静默/清理/无轮次上下文场景、自动继续状态机与预算/超时/延迟入队、通知队列上限与分级丢弃策略、重复挂载保护与失败释放、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -243,7 +243,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.2.4`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.2.5`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 

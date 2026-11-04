@@ -148,44 +148,50 @@ export function apply(ctx, rawConfig) {
   const mountToken = {}
   globalThis[MOUNT_KEY] = mountToken
 
-  ctx.effect(() => {
-    const offSession = ctx.on('session/event', (session, event) => {
-      try {
-        observer.onSessionEvent(session, event)
-      } catch (error) {
-        log('warn', `session event handler failed: ${String(error?.message ?? error)}`)
-        fileLog('observer.error', { event: event?.type, reason: String(error?.message ?? error) })
+  try {
+    ctx.effect(() => {
+      const offSession = ctx.on('session/event', (session, event) => {
+        try {
+          observer.onSessionEvent(session, event)
+        } catch (error) {
+          log('warn', `session event handler failed: ${String(error?.message ?? error)}`)
+          fileLog('observer.error', { event: event?.type, reason: String(error?.message ?? error) })
+        }
+      })
+      const offStatus = ctx.on('agent/status', (payload) => {
+        try {
+          fileLog('agent.status', {
+            sessionId: payload?.agent?.id,
+            status: payload?.status,
+          })
+          observer.onAgentStatus(payload)
+        } catch (error) {
+          log('warn', `agent status handler failed: ${String(error?.message ?? error)}`)
+        }
+      })
+      const offDisposed = ctx.on('session/disposed', (session) => {
+        try {
+          observer.onSessionDisposed(session)
+        } catch (error) {
+          log('warn', `session disposal handler failed: ${String(error?.message ?? error)}`)
+        }
+      })
+      return () => {
+        offSession?.()
+        offStatus?.()
+        offDisposed?.()
+        observer.dispose()
+        fileLog('plugin.unmounted', { pid: process.pid })
+        // Buffered JSONL lines must land before the process may drop the plugin.
+        fileLog.flush?.()
+        if (globalThis[MOUNT_KEY] === mountToken) delete globalThis[MOUNT_KEY]
       }
-    })
-    const offStatus = ctx.on('agent/status', (payload) => {
-      try {
-        fileLog('agent.status', {
-          sessionId: payload?.agent?.id,
-          status: payload?.status,
-        })
-        observer.onAgentStatus(payload)
-      } catch (error) {
-        log('warn', `agent status handler failed: ${String(error?.message ?? error)}`)
-      }
-    })
-    const offDisposed = ctx.on('session/disposed', (session) => {
-      try {
-        observer.onSessionDisposed(session)
-      } catch (error) {
-        log('warn', `session disposal handler failed: ${String(error?.message ?? error)}`)
-      }
-    })
-    return () => {
-      offSession?.()
-      offStatus?.()
-      offDisposed?.()
-      observer.dispose()
-      fileLog('plugin.unmounted', { pid: process.pid })
-      // Buffered JSONL lines must land before the process may drop the plugin.
-      fileLog.flush?.()
-      if (globalThis[MOUNT_KEY] === mountToken) delete globalThis[MOUNT_KEY]
-    }
-  }, 'task-notifier.lifecycle()')
+    }, 'task-notifier.lifecycle()')
+  } catch (error) {
+    // A failed registration must not leave the process-wide latch behind.
+    if (globalThis[MOUNT_KEY] === mountToken) delete globalThis[MOUNT_KEY]
+    throw error
+  }
 }
 
 /**

@@ -44,3 +44,22 @@ test('a duplicate mount is rejected until the first instance unloads', () => {
     delete globalThis[MOUNT_KEY]
   }
 })
+
+test('a failed lifecycle registration releases the mount latch', () => {
+  delete globalThis[MOUNT_KEY]
+  try {
+    const broken = makeCtx()
+    broken.effect = () => {
+      throw new Error('registration failed')
+    }
+    assert.throws(() => apply(broken, { channel: 'log', logFile: false }), /registration failed/)
+    assert.equal(globalThis[MOUNT_KEY], undefined, 'the latch must not survive a failed mount')
+
+    const retry = makeCtx()
+    apply(retry, { channel: 'log', logFile: false })
+    assert.equal(retry.cleanups.length, 1, 'a later mount is admitted')
+    retry.cleanups[0]()
+  } finally {
+    delete globalThis[MOUNT_KEY]
+  }
+})

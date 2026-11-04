@@ -235,3 +235,31 @@ test('a burst beyond the queue cap drops progress but keeps terminal notificatio
   assert.match(results[1].detail, /dropped/)
   assert.equal(results[3].ok, true)
 })
+
+test('a full queue keeps an approval alert and drops a completion first', async () => {
+  const titles = []
+  let release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const notifier = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    maxQueued: 2,
+    run: async (command, args, options) => {
+      titles.push(options.env.DSH_NOTIFY_TITLE)
+      await gate
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  const first = notifier.dispatch({ title: 'first', body: 'b' }, { phase: 'complete' })
+  const second = notifier.dispatch({ title: 'second', body: 'b' }, { phase: 'complete' })
+  const third = notifier.dispatch({ title: 'third', body: 'b' }, { phase: 'complete' })
+  const approval = notifier.dispatch({ title: 'approval', body: 'b' }, { phase: 'approval' })
+  release()
+  const results = await Promise.all([first, second, third, approval])
+  assert.equal(results[1].ok, false, 'the oldest completion is dropped')
+  assert.equal(results[3].ok, true, 'the approval alert is kept')
+  assert.ok(titles.includes('approval'))
+  assert.ok(!titles.includes('second'))
+})

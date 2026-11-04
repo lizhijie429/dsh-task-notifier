@@ -163,7 +163,7 @@ Invalid configuration never throws: each field falls back to its default, the wa
    - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
 5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
 6. **Notification labels**: `turn/start` no longer clears the label, so continuation turns keep the latest human prompt instead of falling back to the workspace folder name; a durable `session/title` still wins when present.
-7. **Sub-agents**: with `notifySubagents: false` (default) a sub-agent session's start/step/complete/error notifications are all suppressed; when enabled their label is `sub-agent <id> (parent <id>)`, distinguishable from the main session, and sub-agents never auto-continue.
+7. **Sub-agents**: with `notifySubagents: false` (default) a sub-agent session's start/step/complete/error/approval notifications are all suppressed; when enabled their label is `sub-agent <id> (parent <id>)`, completion notifications keep duration/steps, they are distinguishable from the main session, and sub-agents never auto-continue.
 8. **Approval alerts**: subscribes to durable `approval/asked`; when `approval/decided` arrives inside the grace window (`approvalGraceMs`, default 1 s — policy `never` auto-reject, automatic grants, cancellation) the alert stays silent, and only a genuinely pending approval raises an OS notification (title `🔐 approval needed`, body with tool name and reason). The toast is a reminder only; approving still happens in the DSH approval panel.
 
 ### Integration with current DSH
@@ -181,10 +181,10 @@ Invalid configuration never throws: each field falls back to its default, the wa
 - **An attempt is consumed only after `followup()` actually succeeds.** Skips (agent gone, pending human input, queued next turn, superseded by a new turn) leave the budget untouched, and the notification says "queued" rather than "sent".
 - Continuation is skipped when: the plugin is disabled, the code is not continuable, strict mode has no exhausted retries, attempts are used up, the agent left the registry, the inbox already holds **user input** or a next-turn entry, the provider asks to wait too long, or strict mode has no turn context. Skip reasons are written to the debug log.
 - The "queued `继续` / not continued" outcome is **always kept** in the error body (placed before the reason, so a verbose provider error cannot truncate it).
-- Notification queue cap 20: when full, the oldest `step`/`start` entry is dropped first; terminal notifications are never dropped before progress ones. Progress toasts time out after 6 s, terminal ones after 12 s.
+- Notification queue cap 20: when full, entries are dropped by priority — oldest `step`/`start` first, then `complete`, then other terminals; an **approval alert is dropped last** because the user must act on it. Progress toasts time out after 6 s, terminal ones after 12 s.
 - Debug-log writes are batched: lines are buffered, then flushed on the next tick, at 200 lines, or on plugin unload (`log.flush()`), with rotation checked per write chunk — no synchronous I/O per session event.
 - A timed-out Windows toast kills the whole child tree with `taskkill /T /F` (no PowerShell/conhost leftovers); the Linux `notify-send` application name comes from `titlePrefix` (default `DSH`).
-- One instance per process: when a profile patch inserts the same id twice, the later mount is skipped with a warning so notifications and continuations cannot be doubled.
+- One instance per process: when a profile patch inserts the same id twice, the later mount is skipped with a warning so notifications and continuations cannot be doubled; a failed mount (an effect registration throwing) releases the latch so a later retry still mounts.
 - A **new human message** or a successful `completed` turn resets the continuation budget.
 - Per-session state is cleaned up on `session/disposed` or plugin unload; timers carry a generation check to ignore stale callbacks.
 - Subagent sessions are silent by default (`notifySubagents: false`) and never auto-continue.
@@ -221,7 +221,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 100 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels, approval alert grace/silence/cleanup, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and drop policy, duplicate-mount protection, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
+All 104 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval alert grace/silence/cleanup and the no-turn-context case, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -242,7 +242,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.2.4`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.2.5`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 

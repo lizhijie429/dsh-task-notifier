@@ -748,3 +748,39 @@ test('session disposal clears a pending approval timer', async () => {
   await flushMicrotasks()
   assert.equal(harness.notifications.length, 0)
 })
+
+test('an approval request is reported even without a captured turn', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  // Plugin mounted after this turn started: no turn/start was observed.
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].title, /需要授权/)
+})
+
+test('a sub-agent completion is reported with its parent label when enabled', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent, config: makeConfig({ notifySubagents: true }) })
+  harness.session = makeSession('child-1', {
+    origin: 'subagent',
+    delegationDepth: 1,
+    cwd: '/work/project',
+    parentSession: 'session-parent-123456',
+  })
+  harness.observer.onSessionEvent(harness.session, turnStart(1))
+  harness.observer.onSessionEvent(harness.session, { type: 'step/start', data: { turn: 1, step: 1 } })
+  harness.observer.onSessionEvent(harness.session, {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'done' }] } },
+  })
+  harness.observer.onSessionEvent(harness.session, turnEnd(1, { kind: 'completed' }))
+  await flushMicrotasks()
+  const notification = harness.notifications.at(-1)
+  assert.match(notification.title, /任务完成/)
+  assert.match(notification.body, /子代理 child-1/)
+  assert.match(notification.body, /父 /)
+  assert.match(notification.body, /1 步/)
+})
