@@ -83,7 +83,7 @@ function loadClientBundle() {
 test('client bundle registers the settings section and row config page', () => {
   const { definition, exported, localeRegistrations, slotRegistrations } = loadClientBundle()
   assert.equal(definition.id, PACKAGE_NAME)
-  assert.deepEqual([...exported.inject], ['slots', 'locale', 'configForms'])
+  assert.deepEqual([...exported.inject], ['slots', 'locale'])
   assert.equal(localeRegistrations.length, 1)
   assert.equal(localeRegistrations[0].ns, 'task-notifier.settings')
   assert.ok(localeRegistrations[0].dictionaries.zh.nav)

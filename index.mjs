@@ -18,8 +18,10 @@
  */
 
 import { fileURLToPath } from 'node:url'
-import { cloneConfig, normalizeConfig } from './lib/config.mjs'
+import { cloneConfig, normalizeConfig, unwrapConfig } from './lib/config.mjs'
+import { registerConfigApi } from './lib/config-api.mjs'
 import { createFileLog } from './lib/file-log.mjs'
+import { mergeUserSettings, readUserSettings, deleteUserSettings, writeUserSettings } from './lib/user-settings.mjs'
 import { createNotifier, resolveChannel, resolveEffectiveChannel } from './lib/notify.mjs'
 import { TaskObserver } from './lib/observer.mjs'
 import { registerWindowsAppId, resolveWindowsIconPath, resolveWindowsImagePath } from './lib/win-appid.mjs'
@@ -69,10 +71,16 @@ export function apply(ctx, rawConfig) {
     return
   }
 
-  const { config: normalizedConfig, warnings } = normalizeConfig(rawConfig, PLUGIN_DIR)
+  const baseRaw = unwrapConfig(rawConfig)
+  const initialUserSettings = readUserSettings(PLUGIN_DIR, (message) => log('warn', message))
+  let revision = 0
+  const { config: normalizedConfig, warnings } = normalizeConfig(
+    mergeUserSettings(baseRaw, initialUserSettings),
+    PLUGIN_DIR,
+  )
   // The settings service edits `.volatile()` fields without remounting the
   // plugin. Keep one mutable snapshot that the file log, notifier and observer
-  // all share, and refresh it in place on loader/volatile-update.
+  // all share, and refresh it in place on loader/volatile-update or a GUI save.
   const config = cloneConfig(normalizedConfig)
   const fileLog = createFileLog({ config, logger: { warn: (message) => log('warn', message) } })
   for (const warning of warnings) {
@@ -149,8 +157,13 @@ export function apply(ctx, rawConfig) {
   // intentionally keep the values chosen at mount.
   const reloadVolatileConfig = () => {
     try {
-      const next = normalizeConfig(rawConfig, PLUGIN_DIR)
+      const merged = mergeUserSettings(
+        unwrapConfig(rawConfig),
+        readUserSettings(PLUGIN_DIR, (message) => log('warn', message)),
+      )
+      const next = normalizeConfig(merged, PLUGIN_DIR)
       Object.assign(config, cloneConfig(next.config))
+      revision += 1
       for (const warning of next.warnings) {
         log('warn', `config: ${warning}`)
         fileLog('config.warning', { warning })
@@ -180,6 +193,41 @@ export function apply(ctx, rawConfig) {
       registerVolatileConfig()
     }
   }
+
+  // Graphical settings API. DSH's settings service rejects writes for rows
+  // inserted by a home patch (the recommended absolute-path install), so the
+  // page saves into the plugin's own user-settings sidecar and this handler
+  // applies the validated config to the shared runtime snapshot.
+  const publicConfig = () => cloneConfig(config)
+  const saveUserConfig = (raw) => {
+    const next = normalizeConfig(mergeUserSettings(baseRaw, raw), PLUGIN_DIR)
+    writeUserSettings(PLUGIN_DIR, next.config)
+    Object.assign(config, cloneConfig(next.config))
+    revision += 1
+    for (const warning of next.warnings) {
+      log('warn', `settings: ${warning}`)
+      fileLog('config.warning', { warning })
+    }
+    fileLog('settings.saved', { config: sanitizedConfig(config) })
+    return { config: publicConfig(), revision }
+  }
+  const resetUserConfig = () => {
+    deleteUserSettings(PLUGIN_DIR)
+    const next = normalizeConfig(baseRaw, PLUGIN_DIR)
+    Object.assign(config, cloneConfig(next.config))
+    revision += 1
+    fileLog('settings.reset', { config: sanitizedConfig(config) })
+    return { config: publicConfig(), revision }
+  }
+  registerConfigApi(ctx, {
+    get: () => ({ config: publicConfig(), revision }),
+    save: saveUserConfig,
+    reset: resetUserConfig,
+    log: (message) => {
+      log('info', message)
+      fileLog('settings.api', { message })
+    },
+  })
 
   fileLog('plugin.mounted', {
     pid: process.pid,
