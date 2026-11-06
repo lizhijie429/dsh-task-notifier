@@ -4,7 +4,9 @@ import {
   buildAppleScript,
   createNotifier,
   escapeAppleScript,
+  findExecutableOnPath,
   resolveChannel,
+  resolveEffectiveChannel,
   runCommand,
 } from '../lib/notify.mjs'
 
@@ -16,6 +18,16 @@ test('resolveChannel maps automatic mode per platform', () => {
   assert.equal(resolveChannel('windows', 'darwin'), 'windows', 'explicit channel wins')
   assert.equal(resolveChannel('log', 'win32'), 'log')
   assert.equal(resolveChannel('none', 'win32'), 'none')
+})
+
+test('channel probing degrades to log when the OS helper is missing', () => {
+  assert.equal(resolveEffectiveChannel('log'), 'log')
+  assert.equal(resolveEffectiveChannel('none'), 'none')
+  assert.equal(resolveEffectiveChannel('windows', 'win32', { PATH: '' }), 'log')
+  assert.equal(resolveEffectiveChannel('linux', 'linux', { PATH: '' }), 'log')
+  assert.equal(resolveEffectiveChannel('macos', 'darwin', { PATH: '' }), 'log')
+  assert.equal(findExecutableOnPath('definitely-not-a-real-helper-xyz', { PATH: '' }), undefined)
+  assert.ok(findExecutableOnPath('node', process.env, process.platform))
 })
 
 test('AppleScript escaping quotes, backslashes and newlines', () => {
@@ -73,6 +85,56 @@ test('linux channel passes the configured application name', async () => {
   })
   await defaultNotifier.dispatch({ title: 't', body: 'b' })
   assert.deepEqual(fallback[0].args.slice(0, 2), ['-a', 'DSH'])
+})
+
+test('linux channel separates options from the summary and can use an icon', async () => {
+  const invocations = []
+  const notifier = createNotifier({
+    config: { channel: 'linux' },
+    platform: 'linux',
+    linuxIconPath: '/tmp/icon.png',
+    run: async (command, args) => {
+      invocations.push({ command, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  await notifier.dispatch({ title: '-starts-with-dash', body: 'body' })
+  const args = invocations[0].args
+  assert.deepEqual(args.slice(0, 2), ['-a', 'DSH'])
+  assert.deepEqual(args.slice(2, 4), ['-i', '/tmp/icon.png'])
+  assert.equal(args[4], '--', 'a summary starting with a dash must not be parsed as an option')
+  assert.deepEqual(args.slice(5), ['-starts-with-dash', 'body'])
+
+  const noIcon = createNotifier({
+    config: { channel: 'linux' },
+    platform: 'linux',
+    linuxIconPath: '',
+    run: async (command, args) => {
+      invocations.push({ command, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  await noIcon.dispatch({ title: 't', body: 'b' })
+  assert.equal(invocations[1].args[2], '--')
+})
+
+test('an explicit channel override wins over the configured channel', async () => {
+  const invoked = []
+  const notifier = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    channelOverride: 'log',
+    log: () => {},
+    fileLog: () => {},
+    run: async () => {
+      invoked.push('spawn')
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  assert.equal(notifier.channel, 'log')
+  const result = await notifier.dispatch({ title: 't', body: 'b' })
+  assert.equal(result.ok, true)
+  assert.equal(invoked.length, 0)
 })
 
 test('log channel never shells out and reports success', async () => {

@@ -11,6 +11,8 @@ DSH（DeepSeek Harness）插件：监控任务（= 一个 `turn`）执行状态�
 - **点击 Toast 可回到 DSH**：Windows 通知带「打开 DSH」动作，并注册 `dsh://open` 协议（打开即聚焦 DSH 窗口）。
 - **提醒不丢失**：审批/提问未被处理时，按 `reminderMs`（默认 5 分钟，最多 3 次）重复提醒。
 - **通知文案可切换语言**：`locale: zh | en | auto`，默认中文；`auto` 跟随 Host 语言环境。
+- **标题带短会话标签**：如 `DSH · ✅ 任务完成 · 设计器任务`，多会话并行时一眼区分；可用 `titleSessionLabel: false` 关闭。
+- **通道自动探测**：`channel: auto` 会检查系统通知命令是否可用，缺失时回退 `log` 并在日志中告警，不会静默失败。
 - 状态判定只读**持久化会话事件**（`turn/start`、`llm/retry`、`turn/end`、`approval/*`、`tool/call`、`tool/result`），不猜测运行中状态。
 - 需要你操作的场景会主动提醒：**审批**（`approval/asked`）与**用户提问/计划审批**（DSH 0.2.2 的 `ask_user_question`、`exit_plan_mode`）。
 
@@ -133,6 +135,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `locale` | `zh` | 通知文案语言：`zh` / `en` / `auto`（跟随 `DSH_LOCALE`/`LC_ALL`/`LANG`）；默认中文 |
 | `reminderMs` | `300000` | 未处理的审批/提问重复提醒间隔（毫秒，0 关闭；最多 3 次） |
 | `clickUrl` | `dsh://open` | Windows Toast 点击/「打开 DSH」按钮跳转目标；支持 `dsh:`/`http:`/`https:`，`false` 关闭 |
+| `titleSessionLabel` | `true` | 标题末尾追加 ≤12 字符的短会话标签，便于区分并行会话 |
 | `channel` | `auto` | `auto`/`windows`/`macos`/`linux`/`log`/`none` |
 | `titlePrefix` | `DSH` | 通知标题前缀（≤60 字符，超出截断并告警） |
 | `windowsAppId` | `DSH.TaskNotifier` | Windows Toast 的 AppUserModelID（决定通知中的应用名/图标） |
@@ -210,7 +213,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | --- | --- | --- |
 | Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`，优先 WinRT Toast，失败降级托盘气泡 | 标题/正文通过环境变量 `DSH_NOTIFY_TITLE`/`DSH_NOTIFY_BODY` 传入，避免命令行转义问题；XML 1.0 不允许的 C0 控制字符会先被剥离，避免 `LoadXml` 抛错。**通知身份为 DSH**：挂载时在 `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier` 注册 `DisplayName` + `IconUri`（图标取 `assets/tray.ico`），Toast 头部显示 DSH 图标/名称；banner 图片用 `assets/icon.png`（WinRT `appLogoOverride` 不支持 `.ico`）。注册失败或旧代码未传 AUMID 时，脚本会自动探测该注册项，探测不到才退回 Windows PowerShell 身份。专注助手/通知设置可能静音。 |
 | macOS | `osascript -e 'display notification …'` | 需要允许脚本发送通知 |
-| Linux | `notify-send -a <titlePrefix> title body` | 需要桌面通知守护进程 |
+| Linux | `notify-send -a <titlePrefix> -i assets/icon.png -- title body` | 需要桌面通知守护进程；`--` 避免以 `-` 开头的内容被当作选项 |
 | log / none | 只写本地日志 / 完全静默 | 用于调试或 CI |
 
 通知是**尽力而为**：失败不会影响任务执行，只写 `notification.failed`/`notification.log` 与 DSH 日志。
@@ -238,7 +241,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 129 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、中英文文案与 locale 自动解析、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签（含完成耗时/步数）、授权与用户提问提醒的宽限/静默/清理/无轮次上下文/计划审批/PTC 子调用/timed pending/重复提醒、Toast 点击参数与本地化动作、自动继续状态机与预算/超时/延迟入队、通知队列上限与分级丢弃策略、重复挂载保护与失败释放、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
+当前 133 个用例全部通过（配置归一化与边界、未知键告警、标题短会话标签与截断、通知文案与继续信息保留、中英文文案与 locale 自动解析、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签（含完成耗时/步数）、授权与用户提问提醒的宽限/静默/清理/无轮次上下文/计划审批/PTC 子调用/timed pending/重复提醒、通道探测与降级、Toast 点击参数与本地化动作、Linux 图标与 `--` 分隔、自动继续状态机与预算/超时/延迟入队、通知队列上限与分级丢弃策略、重复挂载保护与失败释放、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -259,7 +262,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.4.0`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.5.0`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 
@@ -277,6 +280,8 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 重复提醒默认每 5 分钟一次、最多 3 次（`reminderMs: 0` 关闭）；审批/提问处理完成后立即停止，不会补发历史提醒。
 - 点击动作目前仅 Windows 生效（`dsh://open` 依赖 DSH 桌面端注册协议）；macOS/Linux 的通知点击行为由系统决定，插件无法附加动作。
 - 文案语言支持 `zh`/`en`；`locale: auto` 只读取 Host 环境变量（`DSH_LOCALE`/`LC_ALL`/`LANG`），不读取单个 Web 客户端的语言设置。
+- 标题短会话标签最多 12 个字符（超出以 `…` 截断），完整标签仍在正文中；`titleSessionLabel: false` 可关闭。
+- 通道探测只确认系统通知命令存在（PowerShell / `osascript` / `notify-send`），不校验系统通知权限、勿扰模式或桌面通知守护进程是否真正可用。
 - 如果用户在失败后立刻手动输入，插件检测到待处理的**用户输入**会跳过继续，可能表现为“没有自动继续”（属于预期保护）；后台任务通知、时间快照等系统消息不会阻止继续。
 - `desktop` profile 依赖 Electron 桌面端运行插件；`dsh plugin` CLI 不适用于该 profile。
 - 未声明 `Config` schema（保持零依赖），Settings 页没有本插件的图形化配置表单；请直接编辑 profile 的 `cordis.patch.yml`。

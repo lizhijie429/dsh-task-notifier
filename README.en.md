@@ -9,6 +9,8 @@ A DSH (DeepSeek Harness) plugin that watches task execution (one task = one `tur
 - **Clicking a toast returns to DSH**: Windows toasts carry an "Open DSH" action and the registered `dsh://open` protocol (focuses the DSH window).
 - **Nothing gets lost**: unanswered approvals/questions repeat every `reminderMs` (default 5 minutes, at most 3 reminders).
 - **Notification copy is localized**: `locale: zh | en | auto` (default Chinese; `auto` follows the host language).
+- **Titles carry a short session label** (e.g. `DSH · ✅ Task completed · Designer job`) so parallel sessions are distinguishable; disable with `titleSessionLabel: false`.
+- **Channel auto-detection**: `channel: auto` checks that the OS helper exists and falls back to `log` with a warning instead of failing silently.
 - Task state is derived only from **durable session events** (`turn/start`, `llm/retry`, `turn/end`, `approval/*`, `tool/call`, `tool/result`) — no guessing from live status.
 - User-action alerts: **approvals** (`approval/asked`) and **questions / plan reviews** (DSH 0.2.2's `ask_user_question` and `exit_plan_mode`) raise an OS notification when they stay pending.
 - Approval alerts: a durable `approval/asked` that is still pending after the grace window raises an OS notification; automatic decisions stay silent.
@@ -132,6 +134,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `locale` | `zh` | Notification copy language: `zh` / `en` / `auto` (follows `DSH_LOCALE`/`LC_ALL`/`LANG`); Chinese by default |
 | `reminderMs` | `300000` | Repeat interval for unanswered approvals/questions (ms, 0 disables, at most 3 reminders) |
 | `clickUrl` | `dsh://open` | Windows toast click/"Open DSH" target; `dsh:`/`http:`/`https:` allowed, `false` disables |
+| `titleSessionLabel` | `true` | Append a ≤12-character short session label to the title for parallel sessions |
 | `channel` | `auto` | `auto` / `windows` / `macos` / `linux` / `log` / `none` |
 | `titlePrefix` | `DSH` | Notification title prefix (≤60 chars; longer values are truncated with a warning) |
 | `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
@@ -209,7 +212,7 @@ Invalid configuration never throws: each field falls back to its default, the wa
 | --- | --- | --- |
 | Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`, WinRT Toast first, tray balloon fallback | Title/body travel via the `DSH_NOTIFY_TITLE` / `DSH_NOTIFY_BODY` environment variables, avoiding command-line escaping; C0 control characters (illegal in XML 1.0) are stripped first so `LoadXml` cannot throw. **The notification identity is DSH**: on mount the plugin registers `DisplayName` + `IconUri` (icon = `assets/tray.ico`) under `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`, so the toast header shows the DSH icon/name; the banner image uses `assets/icon.png` because WinRT `appLogoOverride` does not accept `.ico`. If registration fails or an older mount passes no AUMID, the script probes that registry key and only then falls back to the Windows PowerShell identity. Focus Assist/notification settings may mute it. |
 | macOS | `osascript -e 'display notification …'` | Scripts must be allowed to send notifications |
-| Linux | `notify-send -a <titlePrefix> title body` | Requires a desktop notification daemon |
+| Linux | `notify-send -a <titlePrefix> -i assets/icon.png -- title body` | Requires a desktop notification daemon; `--` keeps summaries starting with `-` from being parsed as options |
 | log / none | Log only / fully silent | For debugging or CI |
 
 Notifications are **best-effort**: a failure never affects task execution; it is only recorded as `notification.failed`/`notification.log` and in the DSH log.
@@ -237,7 +240,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 129 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, Chinese/English copy and automatic locale resolution, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus no-turn-context, plan-review, PTC sub-call, timed-pending and reminder cases, toast click parameters and localized action labels, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
+All 133 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation and the short session label, notification copy with a guaranteed continuation outcome, Chinese/English copy and automatic locale resolution, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus no-turn-context, plan-review, PTC sub-call, timed-pending and reminder cases, channel probing and fallback, toast click parameters and localized action labels, the Linux icon and `--` separator, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -258,7 +261,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.4.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.5.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -276,6 +279,8 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - Reminders repeat every 5 minutes by default, at most 3 times (`reminderMs: 0` disables them); they stop as soon as the approval/question is resolved.
 - Click actions currently work on Windows only (`dsh://open` relies on the DSH desktop app registering the protocol); macOS/Linux click behavior belongs to the OS and the plugin cannot attach actions there.
 - Notification copy supports `zh`/`en`; `locale: auto` reads host environment variables (`DSH_LOCALE`/`LC_ALL`/`LANG`) only, not a per-client Web language setting.
+- The short title label is capped at 12 characters (truncated with `…`); the full label stays in the body. `titleSessionLabel: false` hides it.
+- Channel probing only checks that the OS helper exists (PowerShell / `osascript` / `notify-send`); it cannot verify notification permissions, Focus/Do Not Disturb, or that a desktop notification daemon is actually running.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
 - No `Config` schema is declared (to stay dependency-free), so Settings has no graphical form for this plugin; edit the profile's `cordis.patch.yml` instead.

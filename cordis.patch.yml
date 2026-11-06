@@ -34,6 +34,9 @@
         # Clicking the Windows toast opens this target. DSH registers the
         # `dsh://open` protocol and focuses the app; false disables the action.
         clickUrl: dsh://open
+        # Append a short session label to the title (e.g. "… · 设计器任务") so
+        # concurrent sessions are distinguishable; false hides it.
+        titleSessionLabel: true
         # auto | windows | macos | linux | log | none
         channel: auto
         titlePrefix: DSH

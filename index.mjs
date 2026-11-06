@@ -18,7 +18,7 @@
 import { fileURLToPath } from 'node:url'
 import { normalizeConfig } from './lib/config.mjs'
 import { createFileLog } from './lib/file-log.mjs'
-import { createNotifier, resolveChannel } from './lib/notify.mjs'
+import { createNotifier, resolveChannel, resolveEffectiveChannel } from './lib/notify.mjs'
 import { TaskObserver } from './lib/observer.mjs'
 import { registerWindowsAppId, resolveWindowsIconPath, resolveWindowsImagePath } from './lib/win-appid.mjs'
 
@@ -78,7 +78,16 @@ export function apply(ctx, rawConfig) {
   // failures must never break the plugin mount.
   const windowsIconPath = resolveWindowsIconPath(PLUGIN_DIR)
   const windowsImagePath = resolveWindowsImagePath(PLUGIN_DIR)
-  const windowsChannel = resolveChannel(config.channel, process.platform) === 'windows'
+  const requestedChannel = resolveChannel(config.channel, process.platform)
+  const effectiveChannel = resolveEffectiveChannel(config.channel, process.platform)
+  if (effectiveChannel !== requestedChannel) {
+    log(
+      'warn',
+      `notification channel "${requestedChannel}" is unavailable on this machine; falling back to "${effectiveChannel}" (install the OS helper or set channel explicitly)`,
+    )
+    fileLog('channel.fallback', { requested: requestedChannel, effective: effectiveChannel })
+  }
+  const windowsChannel = effectiveChannel === 'windows'
   const windowsRegistration = (() => {
     if (!windowsChannel) return { ok: false, skipped: 'channel' }
     try {
@@ -100,6 +109,7 @@ export function apply(ctx, rawConfig) {
     config,
     log,
     fileLog,
+    channelOverride: effectiveChannel,
     windowsAppId: windowsRegistration.ok ? config.windowsAppId : undefined,
     windowsIconPath,
     windowsImagePath,
@@ -128,6 +138,8 @@ export function apply(ctx, rawConfig) {
     node: process.version,
     platform: process.platform,
     channel: notifier.channel,
+    channelRequested: requestedChannel,
+    channelFallback: effectiveChannel !== requestedChannel,
     warnings: warnings.slice(),
     agentsAvailable,
     windows: {
@@ -231,6 +243,7 @@ function sanitizedConfig(config) {
     locale: config.locale,
     reminderMs: config.reminderMs,
     clickUrl: config.clickUrl,
+    titleSessionLabel: config.titleSessionLabel,
     channel: config.channel,
     titlePrefix: config.titlePrefix,
     windowsAppId: config.windowsAppId,

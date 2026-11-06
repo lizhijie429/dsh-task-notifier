@@ -308,3 +308,30 @@ test('buildNotification localizes approval and question reminders', () => {
   assert.match(question.body, /Type: Plan review/)
   assert.match(question.body, /Status: still pending/)
 })
+
+test('the title appends a short session label and can be disabled', () => {
+  const enabled = buildNotification({
+    phase: 'complete',
+    label: '设计器任务',
+    titleSessionLabel: true,
+    maxBodyChars: 240,
+  })
+  assert.match(enabled.title, /DSH · ✅ 任务完成 · 设计器任务/)
+
+  const long = buildNotification({
+    phase: 'complete',
+    label: '这是一个非常长的会话标题用于测试截断行为',
+    titleSessionLabel: true,
+    maxBodyChars: 240,
+  })
+  assert.match(long.title, /· 这是一个非常长的会话标…$/)
+  assert.ok(long.title.length < 40, `title should stay short: ${long.title}`)
+
+  const disabled = buildNotification({
+    phase: 'complete',
+    label: '设计器任务',
+    titleSessionLabel: false,
+    maxBodyChars: 240,
+  })
+  assert.equal(disabled.title, 'DSH · ✅ 任务完成')
+})
