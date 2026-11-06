@@ -1,69 +1,64 @@
-# dsh-task-notifier
+# DSH Task Notifier (dsh-task-notifier)
 
-A DSH (DeepSeek Harness) plugin that watches task execution (one task = one `turn`), raises a **OS-level notification** when the task finishes or fails, and — when the failure is caused by an exhausted model-request retry budget — automatically sends `继续` ("continue") to the session so the agent keeps working.
+> English | [中文](README.md)
 
-- npm package: `@lizhijie429/dsh-task-notifier`; source: <https://github.com/lizhijie429/dsh-task-notifier>.
-- Zero runtime dependencies, plain ESM, single directory. Mount it by absolute path — no build or install step.
-- Notification channels: Windows Toast (PowerShell 5.1 / WinRT), macOS `osascript`, Linux `notify-send`, or plain logging.
-- **Windows toasts are branded as DSH** (registers the `DSH.TaskNotifier` AUMID), no longer "Windows PowerShell".
-- **Clicking a toast returns to DSH**: Windows toasts carry an "Open DSH" action and the registered `dsh://open` protocol (focuses the DSH window).
-- **Nothing gets lost**: unanswered approvals/questions repeat every `reminderMs` (default 5 minutes, at most 3 reminders).
-- **Notification copy is localized**: `locale: zh | en | auto` (default Chinese; `auto` follows the host language).
-- **Privacy mode**: `privacyMode: true` keeps approval reasons and question text out of lock-screen notifications ("Details are available in DSH"); the debug log still keeps the full copy.
-- **Titles carry a short session label** (e.g. `DSH · ✅ Task completed · Designer job`) so parallel sessions are distinguishable; disable with `titleSessionLabel: false`.
-- **Channel auto-detection**: `channel: auto` checks that the OS helper exists and falls back to `log` with a warning instead of failing silently.
-- Task state is derived only from **durable session events** (`turn/start`, `llm/retry`, `turn/end`, `approval/*`, `tool/call`, `tool/result`) — no guessing from live status.
-- User-action alerts: **approvals** (`approval/asked`) and **questions / plan reviews** (DSH 0.2.2's `ask_user_question` and `exit_plan_mode`) raise an OS notification when they stay pending.
-- Approval alerts: a durable `approval/asked` that is still pending after the grace window raises an OS notification; automatic decisions stay silent.
+## Introduction
 
-## Directory layout
+`dsh-task-notifier` is a DeepSeek Harness (DSH) Host plugin. It subscribes to **durable session events** and sends operating-system notifications when a task finishes, fails, or waits for your approval or an answer; when a network/model-request failure interrupts a task, it can also submit an automatic “继续” prompt so long tasks do not need constant attention.
 
-```text
-dsh-task-notifier/
-├── index.mjs              # Cordis plugin entry: logging, config, observer, event wiring
-├── package.json           # dsh.bundle.patch points at the bundle patch (bundle installs)
-├── cordis.patch.yml       # bundle patch: inserts the default task-notifier row
-├── lib/
-│   ├── config.mjs         # defaults, validation, normalization (fallback + warning)
-│   ├── i18n.mjs           # notification copy (zh/en) and locale resolution
-│   ├── format.mjs         # event classification, failure codes, notification copy, retry-exhaustion check
-│   ├── notify.mjs         # channel selection, command execution, AppleScript builder
-│   ├── win-appid.mjs      # Windows notification identity (AUMID) registration + icon lookup
-│   ├── win-toast.ps1      # Windows Toast (WinRT) with tray-balloon fallback
-│   ├── file-log.mjs       # JSONL debug log (batched writes + 256 KB rotation)
-│   └── observer.mjs       # per-session turn state machine + auto-continue
-├── assets/
-│   ├── tray.ico           # notification identity icon (shell icon)
-│   └── icon.png           # appLogoOverride image inside the toast
-└── test/
-    ├── config.test.mjs
-    ├── format.test.mjs
-    ├── notify.test.mjs
-    ├── observer.test.mjs
-    └── e2e/               # local end-to-end patches and scripts (not part of unit tests)
-```
+**Core capabilities**
+
+- **Task status notifications**: completed, failed, cancelled, blocked, output limit reached, interrupted;
+- **Action-needed alerts**: pending DSH approvals, `ask_user_question`, and plan-mode `exit_plan_mode` reviews;
+- **No missed work**: unanswered approvals/questions repeat every `reminderMs` (default 5 minutes, at most 3 reminders) and stop once handled;
+- **Click to return to DSH**: Windows toasts open `dsh://open` and expose an “Open DSH” action;
+- **Auto-continue**: after transient network/model-request failures, submit “继续” on the agent idle edge (budget, cooldown, provider retry delay are configurable);
+- **Readability**: short session labels in titles, Chinese/English copy, phase-specific icons;
+- **Privacy and safety**: `privacyMode` hides lock-screen details; notification helpers receive only a minimal environment; the debug log keeps the full copy for troubleshooting;
+- **Zero dependencies, multi-platform**: Node built-ins only; Windows / macOS / Linux / log-only channels.
+
+**How it works**
+
+- Reads only existing session events: `turn/start`, `step/start`, `llm/retry`, `session/title`, `turn/end`, `approval/*`, `tool/call`, `tool/result`, `tool/ptc-dispatch*`;
+- Appends no custom session events, never rewrites the session log, and changes nothing outside OS notifications;
+- Automatic messages use the plugin's own producer kind (`task-notifier`), compatible with persisted format v4.
+
+**Compatibility and verification**
+
+- Requires DSH `>=0.2.1-0 <0.3.0` (verified on `0.2.2-rc.1`); the Node.js requirement matches DSH (24.9+ since 0.2.2);
+- 140 unit tests (the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
+- Listed in the custom plugin index: <https://lizhijie429.github.io/dsh-task-notifier/index.json>.
 
 ## Installation
 
-### Option 1: mount into the `desktop` profile (recommended for the current desktop app)
+### Option 1: mount directly in the `desktop` profile (recommended for the desktop app)
 
-The `desktop` profile is owned by the Electron app, so `dsh plugin` / `--dump-config` reject it. Edit the user patch layer `$env:USERPROFILE\.dsh\profiles\desktop\cordis.patch.yml` directly (replace `<user>` with your Windows user name) and append:
+The `desktop` profile is owned by the Electron app, so `dsh plugin` and similar CLI commands reject it. Edit the user patch layer `$env:USERPROFILE\.dsh\profiles\desktop\cordis.patch.yml` and append (replace `<plugin dir>` with the real absolute path):
 
 ```yaml
 - insert:
     - id: task-notifier
-      name: 'C:\Users\<user>\.dsh\plugins\dsh-task-notifier\index.mjs'
+      name: '<plugin dir>\index.mjs'
       config:
         channel: auto
-        logFile: 'C:\Users\<user>\.dsh\plugins\dsh-task-notifier\state\task-notifier.log'
         notifyOnStart: false
         notifyOnComplete: true
         notifyOnError: true
         notifyOnAbort: false
         notifyOnStep: false
         notifySubagents: false
+        notifyOnApproval: true
+        approvalGraceMs: 1000
+        notifyOnQuestion: true
+        questionGraceMs: 1000
+        locale: zh
+        reminderMs: 300000
+        clickUrl: dsh://open
+        titleSessionLabel: true
+        privacyMode: false
         titlePrefix: DSH
         maxBodyChars: 240
+        includePreview: false
         autoContinue:
           enabled: true
           message: 继续
@@ -72,36 +67,26 @@ The `desktop` profile is owned by the Electron app, so `dsh plugin` / `--dump-co
           requireRetryExhausted: false
 ```
 
-- `name` must be an **absolute path** (or a file URL). A package name also works, but the package must be a dependency of the profile.
-- After saving: the `desktop` profile's `patchReload` defaults to `live`, so the running app usually hot-loads the plugin. If not, restart DeepSeek Harness.
-- Verify: `state/task-notifier.log` contains `plugin.mounted`.
+- `name` must be an **absolute path** (or a `file://` URL); a package name works when the package is already a profile dependency;
+- The `desktop` profile supports live patch reload; if the plugin does not mount, restart DeepSeek Harness once;
+- Verify: `state/task-notifier.log` in the plugin directory shows `plugin.mounted` with `agentsAvailable: true`.
 
-You can also override `config` for the same `id` in your own profile (a patch **replaces** that row's `config` as a whole; omitted fields fall back to plugin defaults).
-
-### Option 2: install as a bundle into a regular profile (web / headless / custom)
-
-After the npm publish (see "Publishing" at the end):
+### Option 2: install as a plugin package in a regular profile (web / headless / custom)
 
 ```powershell
+# When published on npm
 dsh plugin --profile web add "@lizhijie429/dsh-task-notifier"
-```
 
-Install straight from GitHub (no npm publish needed; the plugin has no build step):
-
-```powershell
+# Directly from GitHub (no build step)
 dsh plugin --profile web add "github:lizhijie429/dsh-task-notifier"
+
+# From a local checkout
+dsh plugin --profile web add "file:$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 ```
 
-Install from a local checkout:
+`dsh.bundle.patch` in `package.json` loads the defaults from `cordis.patch.yml` (id `task-notifier`). Override them by writing `config` for the same id in the profile's own patch.
 
-```powershell
-cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
-dsh plugin --profile web add "file:$PWD"
-```
-
-`dsh.bundle.patch` in `package.json` makes the profile load the defaults from `cordis.patch.yml` (id `task-notifier`); `engines.dsh` requires DSH `>=0.2.1`.
-
-### Option 3: ad-hoc verification (touches no profile)
+### Option 3: temporary verification (no profile changes)
 
 ```powershell
 $pluginDir = "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
@@ -115,180 +100,140 @@ $patch = @"
         autoContinue: { enabled: true, message: 继续, maxAttempts: 2, cooldownMs: 0 }
 "@
 Set-Content -Path "$env:TEMP\task-notifier.patch.yml" -Value $patch -Encoding UTF8
-dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要调用工具。"
+dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "Reply OK only; do not call tools."
 ```
+
+### Upgrade and uninstall
+
+- Upgrade: replace the plugin directory (or reinstall the package) and restart DeepSeek Harness; loaded ESM modules are not hot-reloaded;
+- Uninstall: remove the profile patch row (or uninstall the package) and restart. The Windows `DSH.TaskNotifier` AUMID registration is left behind and can be removed manually.
+
+## Notification scenarios
+
+### Task lifecycle
+
+One notification per `turn` terminal state (multi-step tool calls do not spam):
+
+| `turn/end` reason | Notification title | Default |
+| --- | --- | --- |
+| `completed` | ✅ Task completed (duration, steps, optional preview) | ✅ |
+| `error` | ❌ Task failed (failure code/message, continuation outcome) | ✅ |
+| `blocked` | ⛔ Task blocked | ✅ |
+| `max-tokens` | ⚠️ Output limit reached | ✅ |
+| `interrupted` | ⚠️ Task interrupted | ✅ |
+| `aborted` | ⏹️ Task cancelled (optional cause) | Off (`notifyOnAbort`) |
+| Unknown kind (e.g. `forked`) | No notification | — |
+
+`notifyOnStart` can announce turn start; `notifyOnStep` can report every step (both off by default to avoid noise).
+
+### Pending approvals (your authorization is required)
+
+- Subscribes to durable `approval/asked` and notifies only if it is still pending after `approvalGraceMs` (default 1 s), so `policy: never` automatic rejection, automatic grants and cancellations stay silent;
+- Body: session, tool name, approval reason (hidden by `privacyMode`); title `🔐 Approval needed`;
+- `approval/decided` clears the alert immediately; unanswered alerts repeat per `reminderMs`;
+- The toast is a reminder only; **approve/deny happens in the DSH approval panel**.
+
+### User questions and plan reviews (action needed)
+
+- Recognizes `ask_user_question` (native `tool/call` and PTC `tool/ptc-dispatch-start`) and plan mode's `exit_plan_mode`;
+- Silent when answered within `questionGraceMs` (default 1 s); otherwise notifies with title `❓ Action needed`, the kind, question count and first question/plan heading;
+- A timed question that returns `pending` after its foreground wait (still answerable) adds one “still answerable after the timeout” alert; each question alerts at most once (excluding reminders);
+- Answering still happens in the DSH session; the notification has no answer controls.
+
+### Auto-continue (failure recovery)
+
+- Trigger: `turn/end` with `error` whose code is a network/model-request code (default `retryableCodes`), or `UNKNOWN` with a network-shaped message;
+- Default `requireRetryExhausted: false` continues transient failures immediately; `true` only continues exhausted retry budgets;
+- The prompt is admitted on the `agent/status` `idle` edge via `agent.followup()`, deferred by one microtask so clients do not see the continuation turn as “not running”;
+- Budget `maxAttempts` (default 3, hard cap 50), cooldown `cooldownMs` (default 5 s), `providerRetryAfterMs` (>120 s skips);
+- Skipped (and logged) when: disabled, code not continuable, strict mode not exhausted, attempts used up, agent gone, inbox already holds **human input** (including DSH 0.2.2's `user-question-reply`), a next turn is queued, the provider asks to wait too long, or strict mode has no turn context.
+
+### Reminders, titles and clicks
+
+- `reminderMs` defaults to 300000 (5 minutes); each approval/question gets at most 3 reminders and stops when resolved; `0` disables;
+- Titles append a ≤12-character short session label (e.g. `DSH · ✅ Task completed · Designer job`); disable with `titleSessionLabel: false`;
+- A Windows toast click opens `clickUrl` (default `dsh://open`, focuses DSH) and shows an “Open DSH” button; macOS/Linux click behavior belongs to the OS.
+
+### Sub-agent sessions
+
+- With `notifySubagents: false` (default) all sub-agent start/step/complete/error/approval/question alerts are silent;
+- When enabled, labels are `sub-agent <id> (parent <id>)`, completions keep duration/steps, and sub-agents **never auto-continue**.
+
+### Privacy mode
+
+With `privacyMode: true`, OS notifications hide approval reasons, question text and failure details, and only say “Details are available in DSH”; the debug log **still keeps the full copy**.
 
 ## Configuration
 
+Every field can be set in the profile patch `config:` block. Unset fields fall back to defaults; a patch row **replaces** its whole `config` block (it is not a deep merge).
+
 | Field | Default | Description |
 | --- | --- | --- |
-| `notifyOnStart` | `false` | Notify on `turn/start` (noisy; off by default) |
-| `notifyOnComplete` | `true` | Notify when `turn/end` has `reason.kind` = `completed` / `max-tokens` |
-| `notifyOnError` | `true` | Notify on `error` / `blocked` / `interrupted` |
-| `notifyOnAbort` | `false` | Notify when the user aborts (`aborted`) |
-| `notifyOnStep` | `false` | Notify on every `step/start` (debugging) |
-| `notifySubagents` | `false` | Notify subagent sessions too (main session only by default) |
-| `notifyOnApproval` | `true` | Notify when the DSH approval panel is waiting for your decision |
-| `approvalGraceMs` | `1000` | Approval grace window: approvals auto-answered within it (policy `never`, automatic grants, cancellation) stay silent |
-| `notifyOnQuestion` | `true` | Notify when DSH waits for an `ask_user_question` answer or a plan review (`exit_plan_mode`) |
-| `questionGraceMs` | `1000` | Question grace window: questions answered within it stay silent (no buzz while you are at the screen) |
-| `locale` | `zh` | Notification copy language: `zh` / `en` / `auto` (follows `DSH_LOCALE`/`LC_ALL`/`LANG`); Chinese by default |
-| `reminderMs` | `300000` | Repeat interval for unanswered approvals/questions (ms, 0 disables, at most 3 reminders) |
-| `clickUrl` | `dsh://open` | Windows toast click/"Open DSH" target; `dsh:`/`http:`/`https:` allowed, `false` disables |
-| `titleSessionLabel` | `true` | Append a ≤12-character short session label to the title for parallel sessions |
-| `privacyMode` | `false` | Hide sensitive details (approval reason, question text, failure message) from OS notifications; the debug log keeps the full copy |
+| `notifyOnStart` | `false` | Notify on `turn/start` |
+| `notifyOnComplete` | `true` | Notify for `completed` / `max-tokens` |
+| `notifyOnError` | `true` | Notify for `error` / `blocked` / `interrupted` |
+| `notifyOnAbort` | `false` | Notify on user cancellation (`aborted`) |
+| `notifyOnStep` | `false` | Notify every `step/start` (debugging) |
+| `notifySubagents` | `false` | Notify sub-agent sessions |
+| `notifyOnApproval` | `true` | Pending-approval alerts |
+| `approvalGraceMs` | `1000` | Approval grace window (0–60000 ms) |
+| `notifyOnQuestion` | `true` | Question/plan-review alerts |
+| `questionGraceMs` | `1000` | Question grace window (0–60000 ms) |
+| `locale` | `zh` | Copy language: `zh` / `en` / `auto` (follows `DSH_LOCALE`/`LC_ALL`/`LANG`) |
+| `reminderMs` | `300000` | Reminder interval for unanswered approvals/questions (0–3600000 ms, 0 disables, at most 3) |
+| `clickUrl` | `dsh://open` | Windows toast click/action target; only `dsh:`/`http:`/`https:`, `false` disables |
+| `titleSessionLabel` | `true` | Append a ≤12-character short session label to the title |
+| `privacyMode` | `false` | Hide sensitive details from OS notifications; the log stays complete |
 | `channel` | `auto` | `auto` / `windows` / `macos` / `linux` / `log` / `none` |
-| `titlePrefix` | `DSH` | Notification title prefix (≤60 chars; longer values are truncated with a warning) |
-| `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
-| `windowsAppName` | `DSH` | App display name for Windows toasts |
-| `maxBodyChars` | `240` | Body truncation length (60–2000) |
-| `includePreview` | `false` | Include the model-output preview in notifications (off by default: lock-screen privacy) |
+| `titlePrefix` | `DSH` | Title prefix (≤60 characters) |
+| `windowsAppId` | `DSH.TaskNotifier` | Windows toast AppUserModelID |
+| `windowsAppName` | `DSH` | Windows toast app name |
+| `maxBodyChars` | `240` | Body truncation limit (60–2000) |
+| `includePreview` | `false` | Include the model-output preview (lock-screen privacy) |
 | `logFile` | `<plugin dir>/state/task-notifier.log` | JSONL debug log; relative paths resolve against the plugin dir; rotates at 256 KB to `.1` |
-| `autoContinue.enabled` | `true` | Allow automatic continuation |
-| `autoContinue.message` | `继续` | User message sent automatically |
-| `autoContinue.maxAttempts` | `3` | Max continuations per task (hard cap 50) |
-| `autoContinue.cooldownMs` | `5000` | Min gap between two continuations; `0` = immediate |
-| `autoContinue.requireRetryExhausted` | `false` | `false` by default: network/model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, the provider's `PI_AI_ERROR`, …) always continue; `true` restricts continuation to exhausted retry budgets |
-| `autoContinue.respectProviderRetryAfter` | `true` | Honor `providerRetryAfterMs` as a minimum wait (>120 s skips the continuation) |
-| `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT,PI_AI_ERROR,AI_ERROR,PROVIDER,MODEL,OVERLOADED,NETWORK,CONNECTION,ECONNRESET,ECONNREFUSED,ETIMEDOUT,ENOTFOUND,EAI_AGAIN,SOCKET` | Failure codes treated as continuable (network / model-request class) |
+| `autoContinue.enabled` | `true` | Enable automatic continuation |
+| `autoContinue.message` | `继续` | Prompt text submitted automatically |
+| `autoContinue.maxAttempts` | `3` | Automatic continuations per task (hard cap 50) |
+| `autoContinue.cooldownMs` | `5000` | Minimum spacing between continuations (0–600000 ms) |
+| `autoContinue.requireRetryExhausted` | `false` | `false`: continue network/model failures directly; `true`: only exhausted retry budgets |
+| `autoContinue.respectProviderRetryAfter` | `true` | Honor `providerRetryAfterMs` (>120 s skips) |
+| `autoContinue.retryableCodes` | `EMPTY_RESPONSE,RATE_LIMIT,SERVER,TIMEOUT,TRANSPORT,PI_AI_ERROR,AI_ERROR,PROVIDER,MODEL,OVERLOADED,NETWORK,CONNECTION,ECONNRESET,ECONNREFUSED,ETIMEDOUT,ENOTFOUND,EAI_AGAIN,SOCKET` | Failure codes eligible for continuation |
 
-Invalid configuration never throws: each field falls back to its default, the warnings go to the Host log and to the debug log as `config.warning` events, and `plugin.mounted` carries them in a `warnings` field. Unknown keys (typos in a hand-written patch) are reported too instead of being silently ignored.
+**Validation**: invalid values fall back to defaults with a warning; unknown keys (typos in a hand-written patch) are reported too. Warnings go to the Host log and to the debug log as `config.warning`, and are summarized in `plugin.mounted`'s `warnings`.
 
-## Decision logic
+**Debug log** (the troubleshooting record): default `<plugin dir>/state/task-notifier.log`, JSONL, UTF-8, 256 KB rotation; POSIX mode `0600` (Windows inherits the user-profile ACL). It **keeps the complete notification titles and bodies**; redact before sharing. Key events: `plugin.mounted`, `notification.dispatch/sent/failed`, `auto-continue.*`, `approval.*`, `question.*`, `channel.fallback`, `agent.status`, `observer.error`.
 
-1. **Task = one `turn`**: multi-step tool calls are still one turn; exactly one notification is emitted on `turn/end`.
-2. **State classification** (`reason.kind`):
-   - `completed` → ✅ task finished (duration, steps, last assistant text preview)
-   - `error` → ❌ task failed (failure code/message)
-   - `aborted` → ⏹️ task cancelled (optional; cancellation cause)
-   - `blocked` → ⛔ task blocked
-   - `max-tokens` → ⚠️ task hit the output limit
-3. **Whether a failure earns a continuation** (`lib/observer.mjs#decideContinuation`):
-   - the failure must be an `error` whose code is in `retryableCodes`; anything else is skipped with "the failure is not a continuable type" (`AUTH`, `UNKNOWN`, … never continue);
-   - `requireRetryExhausted` defaults to `false`: network and model-request failures continue right away (e.g. `TRANSPORT: Connection error.` and the provider's `PI_AI_ERROR`) — this is what the desktop profile relies on;
-   - `UNKNOWN` fallback: DSH wraps non-`LlmError` throws as `UNKNOWN`; when the message is network-shaped (`connection/network/socket/timeout/fetch failed/ECONN*/EAI_AGAIN/TLS`, …) the plugin still continues once;
-   - **mounting mid-turn**: after a hot reload the plugin never saw `turn/start`; non-strict mode continues from the durable failure code, while strict mode (`requireRetryExhausted: true`) needs the retry chain and skips with "missing turn context";
-   - with `requireRetryExhausted: true` the stricter rule applies: the turn must contain `llm/retry` events and the last one must satisfy `retry >= maxRetries` (normal-mode budget exhausted); with no `llm/retry` events the first request failed outright (`maxRetries: 0` or a transient failure), which also counts as exhausted;
-   - `always` mode never "exhausts", so it never triggers auto-continue in strict mode;
-   - a failure carrying `providerRetryAfterMs` delays the continuation by that amount; delays over 120 s skip it (`autoContinue.respectProviderRetryAfter`).
-4. **Where continuation is admitted**: on the `agent/status` `idle` edge, via `agent.followup()` — not inside the `turn/end` listener.
-   - Reason: `Session.append()` forbids re-entrant appends while `turn/end` is being published; `followup` writes inbox events, so calling it directly throws.
-   - The `idle` edge is also what the built-in goal-round driver uses. Enqueuing there keeps `agent.whenIdle()` unresolved until the continuation turn runs, so headless runs also finish the continuation turn.
-   - The prompt is admitted one microtask after the `agent/status` listener returns: the Host must emit this turn's idle transition before the continuation turn's running transition (the reverse order makes clients treat the continuation turn as not running, so the composer keeps showing Send instead of Stop).
-   - If the inbox already holds a **next-turn** entry (goal/schedule/subagent-settled), the driver starts that turn immediately without an idle edge; the plugin then skips with `next-turn-pending` instead of burning an attempt on a prompt that could never be admitted.
-5. **Message source**: automatic messages use `source = { kind: 'task-notifier', plugin: 'task-notifier' }`. Persisted format v4 explicitly rejects `kind: 'plugin'` (`format v4 message requires a producer-owned source kind`), so the plugin uses its own producer kind.
-6. **Notification labels**: `turn/start` no longer clears the label, so continuation turns keep the latest human prompt instead of falling back to the workspace folder name; a durable `session/title` still wins when present.
-7. **Sub-agents**: with `notifySubagents: false` (default) a sub-agent session's start/step/complete/error/approval notifications are all suppressed; when enabled their label is `sub-agent <id> (parent <id>)`, completion notifications keep duration/steps, they are distinguishable from the main session, and sub-agents never auto-continue.
-8. **Approval alerts**: subscribes to durable `approval/asked`; when `approval/decided` arrives inside the grace window (`approvalGraceMs`, default 1 s — policy `never` auto-reject, automatic grants, cancellation) the alert stays silent, and only a genuinely pending approval raises an OS notification (title `🔐 approval needed`, body with tool name and reason). The toast is a reminder only; approving still happens in the DSH approval panel.
-9. **User-action alerts (DSH 0.2.2+)**: subscribes to durable `tool/call` and PTC sub-call `tool/ptc-dispatch-start`, and recognises `ask_user_question` (model asks the user) and `exit_plan_mode` (plan awaiting review); a matching `tool/result` / `tool/ptc-dispatch` inside the grace window (`questionGraceMs`, default 1 s) keeps it silent, otherwise the plugin notifies (title `❓ action needed`, body with the kind, question count and first question/plan heading). A timed question that returns `pending` before the grace timer fires (timed out but still answerable) also raises one alert marked `status: still answerable after timeout`; each question alerts at most once.
-
-### Integration with current DSH
-
-- **Display metadata**: `locale/en.json` and `locale/zh.json` provide `meta.title`/`meta.description`, and `exports["./icon"]` exposes `assets/icon.png`; Plugin Manager / Settings show the name, description and icon without activating the plugin.
-- **Required `agents` service**: Cordis only exposes a service to plugins that declare it in `inject`; the plugin declares `inject: ['agents']` to read the Agent registry. 0.2.0 had dropped that injection, so every continuation was skipped as `agent-gone`; 0.2.1 restores it.
-- **Session titles**: subscribes to durable `session/title`; the notification's session label prefers the Host-generated title, then the human prompt summary, then the cwd folder name.
-- **No `Config` schema by design**: the official schema depends on `@deepseek-ai/schemastery`, which would break zero-dependency mounting from an arbitrary path; configuration stays patch-driven with runtime normalization (bounds + unknown-key warnings).
-- **Tested on DSH 0.2.2**: verified mounted with `agentsAvailable: true` on `0.2.2-rc.1`, including notifications and auto-continue. The approval service moved to projections internally, but the durable `approval/asked`/`approval/decided` payloads are unchanged, so behaviour is unaffected.
-- **0.2.2 user-interaction seam**: `ask_user_question` (`dsh-tool-ask-user`) and plan mode's `exit_plan_mode` (`dsh-plan-mode`) both record a durable `tool/call` + `tool/result`; when called from `run_code` (PTC) they record `tool/ptc-dispatch-start` + `tool/ptc-dispatch` instead. The plugin recognises both paths without reading in-memory projections and without appending new events.
-- **No custom session event types**: reads only the existing `turn/start`, `step/start`, `llm/retry`, `session/title`, `turn/end`, `approval/*`, `tool/call` and `tool/result` events and never appends new ones, honoring DSH's "the session log is the only source of truth".
-
-### Safety rails
-
-- `maxAttempts` defaults to 3, hard cap 50.
-- `cooldownMs` defaults to 5 s, preventing a tight "fail → continue → fail" loop; `providerRetryAfterMs` can extend the wait.
-- **An attempt is consumed only after `followup()` actually succeeds.** Skips (agent gone, pending human input, queued next turn, superseded by a new turn) leave the budget untouched, and the notification says "queued" rather than "sent".
-- Continuation is skipped when: the plugin is disabled, the code is not continuable, strict mode has no exhausted retries, attempts are used up, the agent left the registry, the inbox already holds **user input** or a next-turn entry, the provider asks to wait too long, or strict mode has no turn context. Skip reasons are written to the debug log.
-- The "queued `继续` / not continued" outcome is **always kept** in the error body (placed before the reason, so a verbose provider error cannot truncate it).
-- Notification queue cap 20: when full, entries are dropped by priority — oldest `step`/`start` first, then `complete`, then other terminals; **approval and question alerts are dropped last** because the user must act on them. Progress toasts time out after 6 s, terminal ones after 12 s.
-- Debug-log writes are batched: lines are buffered, then flushed on the next tick, at 200 lines, or on plugin unload (`log.flush()`), with rotation checked per write chunk — no synchronous I/O per session event.
-- A timed-out Windows toast kills the whole child tree with `taskkill /T /F` (no PowerShell/conhost leftovers); the Linux `notify-send` application name comes from `titlePrefix` (default `DSH`).
-- One instance per process: when a profile patch inserts the same id twice, the later mount is skipped with a warning so notifications and continuations cannot be doubled; a failed mount (an effect registration throwing) releases the latch so a later retry still mounts.
-- A **new human message** or a successful `completed` turn resets the continuation budget.
-- Per-session state is cleaned up on `session/disposed` or plugin unload; timers carry a generation check to ignore stale callbacks.
-- Subagent sessions are silent by default (`notifySubagents: false`) and never auto-continue.
-- Unknown `turn/end` reason kinds (e.g. `forked`) are not reported as success.
-- **Notification helpers get a minimal environment**: only PATH, SystemRoot/TEMP, HOME, DISPLAY/DBUS and LANG/LC_* pass through — the Host's provider API keys, GitHub tokens and proxy credentials are **not** inherited; `reg.exe`/`taskkill` use the same allowlist.
-- **The debug log keeps the full notification copy** (the troubleshooting record): `notification.dispatch` / `notification.sent` / `notification.failed` contain the complete title and body; on POSIX the log file is created with mode `0600` (Windows inherits the user-profile ACL). Redact before sharing it.
-- **Lock-screen privacy**: `privacyMode: true` hides approval reasons, question text and failure details from OS notifications (the body only says "Details are available in DSH"); the debug log still keeps the full copy.
-- **Late answers count as human input**: DSH 0.2.2's `user-question-reply` blocks auto-continue so "continue" cannot overwrite the user's answer to a pending question.
+> No `Config` schema is declared on purpose (the official schema depends on `@deepseek-ai/schemastery`, which would break zero-dependency mounting from an arbitrary path), so Settings has no graphical form; edit the profile's `cordis.patch.yml` instead.
 
 ## Notification channels
 
 | Platform | Implementation | Notes |
 | --- | --- | --- |
-| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`, WinRT Toast first, tray balloon fallback | Title/body travel via the `DSH_NOTIFY_TITLE` / `DSH_NOTIFY_BODY` environment variables, avoiding command-line escaping; C0 control characters (illegal in XML 1.0) are stripped first so `LoadXml` cannot throw. **The notification identity is DSH**: on mount the plugin registers `DisplayName` + `IconUri` (icon = `assets/tray.ico`) under `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`, so the toast header shows the DSH icon/name; the banner image uses `assets/icon.png` because WinRT `appLogoOverride` does not accept `.ico`. If registration fails or an older mount passes no AUMID, the script probes that registry key and only then falls back to the Windows PowerShell identity. Focus Assist/notification settings may mute it. |
-| macOS | `osascript -e 'display notification …'` | Scripts must be allowed to send notifications |
+| Windows | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File lib/win-toast.ps1`, WinRT Toast first, tray-balloon fallback | Title/body travel through environment variables, avoiding command-line escaping; XML-1.0-illegal control characters are stripped first. The identity is DSH: on mount the plugin registers `DisplayName` + `IconUri` under `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`, so the toast header shows the DSH icon/name; the banner uses `assets/icon.png`. A click opens `clickUrl` (default `dsh://open`) and shows “Open DSH”. If registration fails or an older mount passes no AUMID, the script probes that registry key and only then falls back to the PowerShell identity. |
+| macOS | `osascript -e 'display notification …'` | Scripts must be allowed to send notifications in System Settings; custom actions/icons are not supported |
 | Linux | `notify-send -a <titlePrefix> -i assets/icon.png -- title body` | Requires a desktop notification daemon; `--` keeps summaries starting with `-` from being parsed as options |
-| log / none | Log only / fully silent | For debugging or CI |
+| log / none | Log only / fully silent | For debugging, CI or headless environments |
 
-Notifications are **best-effort**: a failure never affects task execution; it is only recorded as `notification.failed`/`notification.log` and in the DSH log.
+**Channel probing and fallback**: `channel: auto` (and explicit `windows`/`macos`/`linux`) checks at mount whether the OS helper exists; when missing it falls back to `log`, writes `channel.fallback` and warns in the Host log instead of failing every notification silently. `plugin.mounted` records `channelRequested` / `channel` / `channelFallback`.
 
-**Click and reminders**: a Windows toast click opens `clickUrl` (default `dsh://open`, which focuses DSH) and shows an "Open DSH" button; macOS/Linux notifications cannot carry custom actions, so click behavior belongs to the OS. After the first approval/question alert, unanswered items repeat every `reminderMs` (at most 3 times) and stop as soon as `approval/decided` / `tool/result` arrives.
+**Delivery policy**: notifications are best-effort and asynchronous; failures never affect task execution. The queue is capped at 20 and drops by priority: `step`/`start` → `complete` → other terminals, with **approval/question alerts dropped last**. Progress toasts time out after 6 s and terminal ones after 12 s; a timed-out Windows toast is killed with `taskkill /T /F` (whole process tree).
 
-## Debug log
-
-Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; lines are buffered and flushed in batches, forced on plugin unload; POSIX mode `0600`). The log **keeps the complete notification bodies and event details** as the troubleshooting record; redact it before sharing. Key events:
-
-- `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
-- `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
-- `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
-- `approval.asked` / `approval.notified` / `approval.reminder` / `approval.decided`: approval alert grace, first notification, reminders and decision
-- `question.asked` / `question.notified` / `question.reminder` / `question.pending-notified` / `question.resolved`: question/plan-review alert grace, first notification, reminders, timed-out-but-answerable alert and resolution
-- `agent.status`: every Agent status transition (`running`/`idle`), for diagnosing continuation-turn status ordering
-- `observer.error`: event-handling exceptions (never break the main flow)
-
-Read UTF-8 directly in PowerShell: `Get-Content <log> -Encoding UTF8`.
-
-## Tests
-
-```powershell
-cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
-node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
-```
-
-All 140 cases currently pass (the POSIX file-mode case is skipped on Windows): config normalization and bounds, unknown-key warnings, title truncation and the short session label, notification copy with a guaranteed continuation outcome, Chinese/English copy and automatic locale resolution, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus no-turn-context, plan-review, PTC sub-call, timed-pending and reminder cases, channel probing and fallback, toast click parameters and localized action labels, the Linux icon and `--` separator, privacy-mode redaction with full debug logs, the minimal child environment, `user-question-reply` human-input detection, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation.
-
-### End-to-end verification (performed on this machine)
-
-1. **Success path**: `test/e2e/e2e-ok.patch.yml` (OpenAI-compatible provider, key via the `PROVIDER_API_KEY` environment variable, `channel: windows`) → headless returns `exit=0`; the log shows `notification.dispatch` (start/complete) and `notification.sent ... TOAST_OK`.
-2. **Retry exhaustion + auto-continue**: `test/e2e/e2e-continue.patch.yml` (unreachable baseURL + `maxRetries: 2`) → after failures in turns 1/2 the plugin sends `继续` each time, then stops when turn 3 reaches `maxAttempts: 2`; the persisted session contains two `user/message source={"kind":"task-notifier","plugin":"task-notifier"} text="继续"` entries and headless finally exits with `TRANSPORT` (`exit=1`, as expected).
-3. **Windows icon branding**: after registering `DSH.TaskNotifier`, invoking `win-toast.ps1` directly prints `TOAST_OK` and the toast header shows the DSH icon and the "DSH" name; without `DSH_NOTIFY_AUMID` the script self-detects the registry key and still works.
-
-`test/e2e/dump-session.cjs` decompresses a session for inspection: `node test/e2e/dump-session.cjs <session.v4.jsonl.zstd>`.
-
-## Market index
-
-DSH has no official plugin registry: the **Discover** page only reads index sources the user adds (off by default; enable **Custom plugin indexes** under Plugins → Experimental plugins). This repository publishes a format-1 index under `docs/`:
-
-- Index URL (after GitHub Pages is enabled): <https://lizhijie429.github.io/dsh-task-notifier/index.json>
-- Regenerate: `npm run market:index` (pins the HEAD commit and commit time, copies the icon into `docs/icons/`)
-- Hosting: repo Settings → Pages → *Deploy from a branch* → `main` / `/docs`
-- Subscribe: Plugins page → Experimental plugins → enable **Custom plugin indexes** → Discover → Index sources → add the URL → search `dsh-task-notifier` and install
-- The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
-- Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
-- Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.6.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+**Minimal child environment**: PowerShell / osascript / notify-send / reg.exe / taskkill inherit only PATH, SystemRoot/TEMP, HOME, DISPLAY/DBUS and LANG/LC_* — never the Host's provider credentials or tokens.
 
 ## Known limitations
 
-- **Windows Toast** depends on PowerShell 5.1 and system notification settings; on enterprise images that disable notifications only the log is written.
-- **Windows 10 (build < 22000)** requires a Start-menu shortcut for an unpackaged app's AUMID. If toasts still show "Windows PowerShell", create a Start-menu shortcut pointing at this plugin's `assets\tray.ico`, or accept the fallback identity (the notification itself still works). Windows 11 works with the HKCU registration alone (verified on this machine).
-- Notifications are asynchronous fire-and-forget; delivery is not guaranteed before the process exits (very short headless tasks may only show `notification.dispatch`).
-- The model-output preview is omitted by default (`includePreview: false`); enabling it puts that text on the lock screen/notification center, so keep it off for sensitive work.
-- Auto-continue is skipped when the inbox already holds a next-turn entry (`next-turn-pending`; the session continues on its own) or when the provider asks to wait more than 120 s (`providerRetryAfterMs`), to avoid pointless retries.
-- `channel: windows` only works on Windows; use `auto` or `log` elsewhere.
-- Auto-continue covers network and model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, `PI_AI_ERROR`, … plus `UNKNOWN` with a network-shaped message); `AUTH`, non-network `UNKNOWN` and user aborts never continue. With `requireRetryExhausted: true` only exhausted-retry failures continue, and the turn's `turn/start` must have been observed.
-- With `notifySubagents: false` sub-agent completions/failures are not reported separately; enable it for sub-agent progress (labels carry the parent id).
-- Approval alerts are OS notifications only (no approve/deny buttons); the decision still happens in the DSH approval panel. Approvals auto-answered inside the grace window (policy `never`, automatic grants, cancellation) are not announced, and an approval requested before the plugin mounted is not retroactively announced.
-- Question/plan-review alerts also carry no answer controls: answer back in the DSH session. Questions answered inside their grace window are not announced; each question alerts at most once (a timed question returning `pending` before the grace timer fires adds a "still answerable after timeout" note, otherwise the first alert stands). A `tool/call` recorded before the plugin mounted is not retroactively announced. The tool names (`ask_user_question`, `exit_plan_mode`) are the current DSH contract; a rename would need a plugin update.
-- Notifications are best-effort: when the queue is full older progress toasts are dropped, and terminal toasts can still be delayed while several sessions fail at once.
-- Reminders repeat every 5 minutes by default, at most 3 times (`reminderMs: 0` disables them); they stop as soon as the approval/question is resolved.
-- Click actions currently work on Windows only (`dsh://open` relies on the DSH desktop app registering the protocol); macOS/Linux click behavior belongs to the OS and the plugin cannot attach actions there.
-- Notification copy supports `zh`/`en`; `locale: auto` reads host environment variables (`DSH_LOCALE`/`LC_ALL`/`LANG`) only, not a per-client Web language setting.
-- The short title label is capped at 12 characters (truncated with `…`); the full label stays in the body. `titleSessionLabel: false` hides it.
-- `privacyMode` only affects OS notifications; **the debug log keeps the full copy** (the troubleshooting record). The file is `0600` on POSIX and inherits the user-profile ACL on Windows; redact it before sharing.
-- Channel probing only checks that the OS helper exists (PowerShell / `osascript` / `notify-send`); it cannot verify notification permissions, Focus/Do Not Disturb, or that a desktop notification daemon is actually running.
-- If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
-- The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
-- No `Config` schema is declared (to stay dependency-free), so Settings has no graphical form for this plugin; edit the profile's `cordis.patch.yml` instead.
-- The running desktop app does not hot-reload an already loaded ESM module; restart DeepSeek Harness once for code changes to take effect (the icon branding already works with older mounts via the `win-toast.ps1` self-detection).
+- **Windows toast prerequisites**: requires PowerShell 5.1 and system notification settings; enterprise images with notifications disabled, Focus Assist or Do Not Disturb only leave log entries. Windows 10 (build < 22000) may require a Start-menu shortcut for the unpackaged AUMID; otherwise the fallback identity is used (the notification still appears).
+- **Asynchronous delivery**: fire-and-forget; delivery is not guaranteed before process exit. Very short headless tasks may only show `notification.dispatch`.
+- **Bounded queue**: extreme bursts drop low-priority notifications; terminal toasts can still be delayed while several sessions fail at once.
+- **Not covered**: background-job completions (`job/settled`, DSH already notifies in-app), maintenance `agent/error` outside a turn, and custom plugins that call `userQuestions` directly without producing a tool-call event.
+- **Content visibility**: by default the body contains the session title, approval tool/reason, question summary and failure details, which may appear on the lock screen/notification center; set `privacyMode: true` in sensitive environments. For troubleshooting the log **keeps the full copy** (POSIX `0600`, Windows user ACL); redact before sharing.
+- **No decision buttons / session deep links**: notifications carry no approve/deny/answer buttons; the click action works on Windows only and focuses DSH (`dsh://open`) without locating the specific session; macOS/Linux click behavior belongs to the OS.
+- **Limited reminders**: 5-minute interval by default, at most 3 reminders, stopping on resolution; an approval/question recorded before the plugin mounted is not retroactively announced.
+- **Sub-agents**: silent by default; enable `notifySubagents` to receive them. Sub-agents never auto-continue.
+- **Auto-continue scope**: only network/model-request failures; `AUTH`, non-network `UNKNOWN` and user aborts never continue. Strict mode depends on the turn's `llm/retry` chain; after a hot reload without turn context strict mode skips. The budget lives in memory and resets when the process restarts.
+- **Language and titles**: copy supports `zh`/`en`; `locale: auto` reads host environment variables only, not a per-client Web language setting. The short title label is capped at 12 characters (truncated with `…`).
+- **Channel probing boundaries**: only checks that the OS helper exists; it cannot verify notification permissions or that a desktop notification daemon is actually running.
+- **No graphical settings**: no `Config` schema, so edit the profile's `cordis.patch.yml`.
+- **AUMID cleanup**: uninstalling the plugin does not remove `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`; delete it manually if needed.
+- **Restart for code changes**: the running desktop app does not hot-reload loaded ESM modules; restart DeepSeek Harness after upgrading.
+- **Version range**: requires DSH `>=0.2.1-0 <0.3.0`; DSH 0.3+ needs a plugin release first.
