@@ -230,3 +230,29 @@ test('buildNotification renders a pending approval prompt', () => {
   assert.match(body, /工具：pwsh/)
   assert.match(body, /原因：escalate sandbox/)
 })
+
+test('buildNotification renders a pending user question', () => {
+  const { title, body } = buildNotification({
+    phase: 'question',
+    label: '设计器任务',
+    question: { kind: 'question', summary: '临时目录放在哪里？', count: 2 },
+    titlePrefix: 'DSH',
+    maxBodyChars: 240,
+  })
+  assert.match(title, /需要你操作/)
+  assert.match(body, /类型：问题/)
+  assert.match(body, /数量：2 个/)
+  assert.match(body, /内容：临时目录放在哪里？/)
+})
+
+test('buildNotification renders a pending plan review', () => {
+  const { body } = buildNotification({
+    phase: 'question',
+    label: '设计器任务',
+    question: { kind: 'plan-review', summary: '重构通知模块' },
+    titlePrefix: 'DSH',
+    maxBodyChars: 240,
+  })
+  assert.match(body, /类型：计划审批/)
+  assert.match(body, /内容：重构通知模块/)
+})

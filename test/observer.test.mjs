@@ -784,3 +784,123 @@ test('a sub-agent completion is reported with its parent label when enabled', as
   assert.match(notification.body, /父 /)
   assert.match(notification.body, /1 步/)
 })
+
+function questionCall(callId = 'call-q1', questions = [{ id: 'q', header: '确认', question: '临时目录放在哪里？' }]) {
+  return {
+    type: 'tool/call',
+    data: { callId, name: 'ask_user_question', arguments: JSON.stringify({ questions }) },
+  }
+}
+
+function planCall(callId = 'call-p1', plan = '# 重构通知模块\n\n步骤……') {
+  return {
+    type: 'tool/call',
+    data: { callId, name: 'exit_plan_mode', arguments: JSON.stringify({ plan }) },
+  }
+}
+
+function toolResultOf(callId, text = '{"answers":[]}', isError = false) {
+  return {
+    type: 'tool/result',
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        toolCallId: callId,
+        isError,
+        source: { kind: 'tool', callId },
+        content: [{ type: 'text', text }],
+      },
+    },
+  }
+}
+
+test('a pending user question notifies after the grace window', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, questionCall())
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 0, 'no notification inside the grace window')
+  assert.equal(harness.timers.length, 1)
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].title, /需要你操作/)
+  assert.match(harness.notifications[0].body, /类型：问题/)
+  assert.match(harness.notifications[0].body, /内容：临时目录放在哪里？/)
+})
+
+test('a plan review notifies with its plan heading', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, planCall())
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].body, /类型：计划审批/)
+  assert.match(harness.notifications[0].body, /内容：重构通知模块/)
+})
+
+test('a question answered inside the grace window stays silent', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, questionCall())
+  harness.observer.onSessionEvent(harness.session, toolResultOf('call-q1'))
+  await flushMicrotasks()
+  assert.equal(harness.timers.length, 0, 'the timer is cleared by the tool result')
+  assert.equal(harness.notifications.length, 0)
+})
+
+test('a question result after the notification closes quietly', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, questionCall())
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.doesNotThrow(() => harness.observer.onSessionEvent(harness.session, toolResultOf('call-q1')))
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+})
+
+test('question notifications honour the switch and sub-agent visibility', async () => {
+  const { agent } = makeAgent()
+  const disabled = makeObserver({ agent, config: makeConfig({ notifyOnQuestion: false }) })
+  disabled.session = makeSession()
+  disabled.observer.onSessionEvent(disabled.session, questionCall())
+  assert.equal(disabled.timers.length, 0)
+
+  const subagent = makeObserver({ agent })
+  subagent.session = makeSession('child-1', {
+    origin: 'subagent',
+    delegationDepth: 1,
+    parentSession: 'session-parent-123456',
+  })
+  subagent.observer.onSessionEvent(subagent.session, questionCall())
+  assert.equal(subagent.timers.length, 0)
+
+  const visible = makeObserver({ agent, config: makeConfig({ notifySubagents: true }) })
+  visible.session = makeSession('child-1', {
+    origin: 'subagent',
+    delegationDepth: 1,
+    parentSession: 'session-parent-123456',
+  })
+  visible.observer.onSessionEvent(visible.session, questionCall())
+  assert.equal(visible.timers.length, 1)
+})
+
+test('session disposal clears a pending question timer', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, questionCall())
+  assert.equal(harness.timers.length, 1)
+  harness.observer.onSessionDisposed(harness.session)
+  assert.equal(harness.timers.length, 0)
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 0)
+})

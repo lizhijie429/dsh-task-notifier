@@ -36,6 +36,8 @@ test('patch config overrides defaults without losing sibling fields', () => {
   assert.equal(config.autoContinue.requireRetryExhausted, false, 'network/model failures continue by default')
   assert.equal(config.notifyOnApproval, true, 'pending approvals are notified by default')
   assert.equal(config.approvalGraceMs, 1000)
+  assert.equal(config.notifyOnQuestion, true, 'pending user questions are notified by default')
+  assert.equal(config.questionGraceMs, 1000)
 })
 
 test('approval notification settings normalize and fall back', () => {
@@ -48,6 +50,18 @@ test('approval notification settings normalize and fall back', () => {
   assert.equal(invalid.config.approvalGraceMs, 1000)
   assert.ok(invalid.warnings.some((warning) => warning.includes('notifyOnApproval')))
   assert.ok(invalid.warnings.some((warning) => warning.includes('approvalGraceMs')))
+})
+
+test('user-question notification settings normalize and fall back', () => {
+  const custom = normalizeConfig({ notifyOnQuestion: false, questionGraceMs: 2500 }, '/p')
+  assert.equal(custom.config.notifyOnQuestion, false)
+  assert.equal(custom.config.questionGraceMs, 2500)
+
+  const invalid = normalizeConfig({ notifyOnQuestion: 'yes', questionGraceMs: 120_000 }, '/p')
+  assert.equal(invalid.config.notifyOnQuestion, true)
+  assert.equal(invalid.config.questionGraceMs, 1000)
+  assert.ok(invalid.warnings.some((warning) => warning.includes('notifyOnQuestion')))
+  assert.ok(invalid.warnings.some((warning) => warning.includes('questionGraceMs')))
 })
 
 test('invalid values fall back to defaults and report warnings', () => {

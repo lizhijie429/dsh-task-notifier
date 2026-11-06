@@ -21,6 +21,11 @@
         # Approvals answered within this window are treated as automatic and
         # do not raise a notification (policy `never` answers immediately).
         approvalGraceMs: 1000
+        # Notify when DSH waits on a user answer (ask_user_question) or a plan
+        # review (exit_plan_mode); questions answered within the grace window
+        # stay silent.
+        notifyOnQuestion: true
+        questionGraceMs: 1000
         # auto | windows | macos | linux | log | none
         channel: auto
         titlePrefix: DSH

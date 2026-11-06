@@ -226,6 +226,8 @@ function sanitizedConfig(config) {
     notifySubagents: config.notifySubagents,
     notifyOnApproval: config.notifyOnApproval,
     approvalGraceMs: config.approvalGraceMs,
+    notifyOnQuestion: config.notifyOnQuestion,
+    questionGraceMs: config.questionGraceMs,
     channel: config.channel,
     titlePrefix: config.titlePrefix,
     windowsAppId: config.windowsAppId,
