@@ -256,3 +256,13 @@ test('buildNotification renders a pending plan review', () => {
   assert.match(body, /类型：计划审批/)
   assert.match(body, /内容：重构通知模块/)
 })
+
+test('buildNotification marks a timed-out but answerable question', () => {
+  const { body } = buildNotification({
+    phase: 'question',
+    label: '设计器任务',
+    question: { kind: 'question', summary: '临时目录放在哪里？', pending: true },
+    maxBodyChars: 240,
+  })
+  assert.match(body, /状态：超时后仍可回答/)
+})

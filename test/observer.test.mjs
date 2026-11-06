@@ -904,3 +904,77 @@ test('session disposal clears a pending question timer', async () => {
   await flushMicrotasks()
   assert.equal(harness.notifications.length, 0)
 })
+
+function ptcQuestionStart(subCallId = 'sub-q1', questions = [{ id: 'q', question: '计划内的依赖可以升级吗？' }]) {
+  return {
+    type: 'tool/ptc-dispatch-start',
+    data: {
+      rootCallId: 'call-run',
+      parentCallId: 'call-run',
+      subCallId,
+      name: 'ask_user_question',
+      arguments: { questions },
+    },
+  }
+}
+
+function ptcQuestionResult(subCallId = 'sub-q1', text = '{"answers":[]}', isError = false) {
+  return {
+    type: 'tool/ptc-dispatch',
+    data: {
+      rootCallId: 'call-run',
+      parentCallId: 'call-run',
+      subCallId,
+      name: 'ask_user_question',
+      isError,
+      content: [{ type: 'text', text }],
+    },
+  }
+}
+
+test('a PTC-generated user question notifies after the grace window', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, ptcQuestionStart())
+  assert.equal(harness.notifications.length, 0)
+  assert.equal(harness.timers.length, 1)
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].body, /内容：计划内的依赖可以升级吗？/)
+})
+
+test('a PTC question answered inside the grace window stays silent', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, ptcQuestionStart())
+  harness.observer.onSessionEvent(harness.session, ptcQuestionResult())
+  await flushMicrotasks()
+  assert.equal(harness.timers.length, 0)
+  assert.equal(harness.notifications.length, 0)
+})
+
+test('a timed question that returns pending before the grace window still notifies once', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, questionCall())
+  harness.observer.onSessionEvent(harness.session, toolResultOf('call-q1', '{"pending":true,"callId":"call-q1"}'))
+  await flushMicrotasks()
+  assert.equal(harness.timers.length, 0)
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].body, /状态：超时后仍可回答/)
+})
+
+test('a PTC timed question that returns pending sends one pending alert', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, ptcQuestionStart())
+  harness.observer.onSessionEvent(harness.session, ptcQuestionResult('sub-q1', '{"pending":true,"callId":"sub-q1"}'))
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.match(harness.notifications[0].body, /状态：超时后仍可回答/)
+})

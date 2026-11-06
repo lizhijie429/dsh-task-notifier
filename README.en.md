@@ -168,7 +168,7 @@ Invalid configuration never throws: each field falls back to its default, the wa
 6. **Notification labels**: `turn/start` no longer clears the label, so continuation turns keep the latest human prompt instead of falling back to the workspace folder name; a durable `session/title` still wins when present.
 7. **Sub-agents**: with `notifySubagents: false` (default) a sub-agent session's start/step/complete/error/approval notifications are all suppressed; when enabled their label is `sub-agent <id> (parent <id>)`, completion notifications keep duration/steps, they are distinguishable from the main session, and sub-agents never auto-continue.
 8. **Approval alerts**: subscribes to durable `approval/asked`; when `approval/decided` arrives inside the grace window (`approvalGraceMs`, default 1 s — policy `never` auto-reject, automatic grants, cancellation) the alert stays silent, and only a genuinely pending approval raises an OS notification (title `🔐 approval needed`, body with tool name and reason). The toast is a reminder only; approving still happens in the DSH approval panel.
-9. **User-action alerts (DSH 0.2.2+)**: subscribes to durable `tool/call` and recognises `ask_user_question` (model asks the user) and `exit_plan_mode` (plan awaiting review); a matching `tool/result` inside the grace window (`questionGraceMs`, default 1 s) keeps it silent, otherwise the plugin notifies (title `❓ action needed`, body with the kind, question count and first question/plan heading). Timed questions also alert during their foreground wait.
+9. **User-action alerts (DSH 0.2.2+)**: subscribes to durable `tool/call` and PTC sub-call `tool/ptc-dispatch-start`, and recognises `ask_user_question` (model asks the user) and `exit_plan_mode` (plan awaiting review); a matching `tool/result` / `tool/ptc-dispatch` inside the grace window (`questionGraceMs`, default 1 s) keeps it silent, otherwise the plugin notifies (title `❓ action needed`, body with the kind, question count and first question/plan heading). A timed question that returns `pending` before the grace timer fires (timed out but still answerable) also raises one alert marked `status: still answerable after timeout`; each question alerts at most once.
 
 ### Integration with current DSH
 
@@ -177,7 +177,7 @@ Invalid configuration never throws: each field falls back to its default, the wa
 - **Session titles**: subscribes to durable `session/title`; the notification's session label prefers the Host-generated title, then the human prompt summary, then the cwd folder name.
 - **No `Config` schema by design**: the official schema depends on `@deepseek-ai/schemastery`, which would break zero-dependency mounting from an arbitrary path; configuration stays patch-driven with runtime normalization (bounds + unknown-key warnings).
 - **Tested on DSH 0.2.2**: verified mounted with `agentsAvailable: true` on `0.2.2-rc.1`, including notifications and auto-continue. The approval service moved to projections internally, but the durable `approval/asked`/`approval/decided` payloads are unchanged, so behaviour is unaffected.
-- **0.2.2 user-interaction seam**: `ask_user_question` (`dsh-tool-ask-user`) and plan mode's `exit_plan_mode` (`dsh-plan-mode`) both record a durable `tool/call` + `tool/result`; the plugin derives pending alerts from those events without reading in-memory projections and without appending new events.
+- **0.2.2 user-interaction seam**: `ask_user_question` (`dsh-tool-ask-user`) and plan mode's `exit_plan_mode` (`dsh-plan-mode`) both record a durable `tool/call` + `tool/result`; when called from `run_code` (PTC) they record `tool/ptc-dispatch-start` + `tool/ptc-dispatch` instead. The plugin recognises both paths without reading in-memory projections and without appending new events.
 - **No custom session event types**: reads only the existing `turn/start`, `step/start`, `llm/retry`, `session/title`, `turn/end`, `approval/*`, `tool/call` and `tool/result` events and never appends new ones, honoring DSH's "the session log is the only source of truth".
 
 ### Safety rails
@@ -215,7 +215,7 @@ Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; 
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
 - `approval.asked` / `approval.notified` / `approval.decided`: approval alert grace, notification and decision
-- `question.asked` / `question.notified` / `question.resolved`: question/plan-review alert grace, notification and resolution
+- `question.asked` / `question.notified` / `question.pending-notified` / `question.resolved`: question/plan-review alert grace, notification, timed-out-but-answerable alert and resolution
 - `agent.status`: every Agent status transition (`running`/`idle`), for diagnosing continuation-turn status ordering
 - `observer.error`: event-handling exceptions (never break the main flow)
 
@@ -228,7 +228,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 113 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus the no-turn-context and plan-review cases, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
+All 118 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus the no-turn-context, plan-review, PTC sub-call and timed-pending cases, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -249,7 +249,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.3.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.3.1`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -262,7 +262,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - Auto-continue covers network and model-request failures (`TRANSPORT`, `TIMEOUT`, `RATE_LIMIT`, `SERVER`, `PI_AI_ERROR`, … plus `UNKNOWN` with a network-shaped message); `AUTH`, non-network `UNKNOWN` and user aborts never continue. With `requireRetryExhausted: true` only exhausted-retry failures continue, and the turn's `turn/start` must have been observed.
 - With `notifySubagents: false` sub-agent completions/failures are not reported separately; enable it for sub-agent progress (labels carry the parent id).
 - Approval alerts are OS notifications only (no approve/deny buttons); the decision still happens in the DSH approval panel. Approvals auto-answered inside the grace window (policy `never`, automatic grants, cancellation) are not announced, and an approval requested before the plugin mounted is not retroactively announced.
-- Question/plan-review alerts also carry no answer controls: answer back in the DSH session. Questions answered inside their grace window are not announced, and a `tool/call` recorded before the plugin mounted is not retroactively announced. The tool names (`ask_user_question`, `exit_plan_mode`) are the current DSH contract; a rename would need a plugin update.
+- Question/plan-review alerts also carry no answer controls: answer back in the DSH session. Questions answered inside their grace window are not announced; each question alerts at most once (a timed question returning `pending` before the grace timer fires adds a "still answerable after timeout" note, otherwise the first alert stands). A `tool/call` recorded before the plugin mounted is not retroactively announced. The tool names (`ask_user_question`, `exit_plan_mode`) are the current DSH contract; a rename would need a plugin update.
 - Notifications are best-effort: when the queue is full older progress toasts are dropped, and terminal toasts can still be delayed while several sessions fail at once.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
