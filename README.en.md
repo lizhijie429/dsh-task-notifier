@@ -1,4 +1,4 @@
-# DSH Task Notifier (dsh-task-notifier)
+﻿# DSH Task Notifier (dsh-task-notifier)
 
 > English | [中文](README.md)
 
@@ -26,7 +26,8 @@
 **Compatibility and verification**
 
 - Requires DSH `>=0.2.1-0 <0.3.0` (verified on `0.2.2-rc.1`); the Node.js requirement matches DSH (24.9+ since 0.2.2);
-- 142 unit tests (141 pass + the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
+- 149 unit tests (148 pass + the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
+- **Graphical settings page**: DSH Settings → Task Notifier, or the plugin row's **Configure** button. Changes write to the DSH settings layer and apply live (except mount-scoped options such as channel/icon/log path).
 - Listed in the custom plugin index: <https://lizhijie429.github.io/dsh-task-notifier/index.json>.
 
 ## Installation
@@ -71,7 +72,8 @@ The `desktop` profile is owned by the Electron app, so `dsh plugin` and similar 
 
 - `name` must be an **absolute path** (or a `file://` URL); a package name works when the package is already a profile dependency;
 - The `desktop` profile supports live patch reload; if the plugin does not mount, restart DeepSeek Harness once;
-- Verify: `state/task-notifier.log` in the plugin directory shows `plugin.mounted` with `agentsAvailable: true`.
+- Verify: `state/task-notifier.log` in the plugin directory shows `plugin.mounted` with `agentsAvailable: true`;
+- **Graphical configuration**: once mounted, open **DSH Settings → Task Notifier**, or use the plugin row's **Configure** button. The page reads and edits the same configuration, saves to the DSH settings layer (over the profile patch), and needs no YAML editing.
 
 ### Option 2: install as a plugin package in a regular profile (web / headless / custom)
 
@@ -212,7 +214,7 @@ Every field can be set in the profile patch `config:` block. Unset fields fall b
 
 **Debug log** (the troubleshooting record): default `<plugin dir>/state/task-notifier.log`, JSONL, UTF-8, 256 KB rotation; POSIX mode `0600` (Windows inherits the user-profile ACL). It **keeps the complete notification titles and bodies**; redact before sharing. Key events: `plugin.mounted`, `notification.dispatch/sent/failed`, `auto-continue.*`, `approval.*`, `question.*`, `channel.fallback`, `agent.status`, `observer.error`.
 
-> No `Config` schema is declared on purpose (the official schema depends on `@deepseek-ai/schemastery`, which would break zero-dependency mounting from an arbitrary path), so Settings has no graphical form; edit the profile's `cordis.patch.yml` instead.
+> **Graphical settings**: the plugin declares a `Config` schema (vendored schemastery/cosmokit, MIT, so an externally mounted plugin can resolve it), and every field is `.volatile()`, so the DSH settings page can read and write it live. Entry points: **Settings → Task Notifier** in the Settings sidebar, or the plugin row's **Configure** button. Saving writes the DSH settings layer, which takes precedence over the profile `cordis.patch.yml`; **Discard changes** only drops the draft, and restoring patch values needs a reset/clear in the settings layer. There are no non-volatile fields, so most options apply without a restart.
 
 ## Notification channels
 
@@ -243,7 +245,9 @@ Every field can be set in the profile patch `config:` block. Unset fields fall b
 - **Auto-continue scope**: only network/model-request failures; `AUTH`, non-network `UNKNOWN` and user aborts never continue. Strict mode depends on the turn's `llm/retry` chain; after a hot reload without turn context strict mode skips. The budget lives in memory and resets when the process restarts.
 - **Language and titles**: copy supports `zh`/`en`; `locale: auto` reads host environment variables only, not a per-client Web language setting. The short title label is capped at 12 characters (truncated with `…`).
 - **Channel probing boundaries**: only checks that the OS helper exists; it cannot verify notification permissions or that a desktop notification daemon is actually running.
-- **No graphical settings**: no `Config` schema, so edit the profile's `cordis.patch.yml`.
+- **Live settings scope**: most options apply immediately after saving; the notification-channel probe, the Windows AUMID registration and the log-file handle are fixed at mount, so changing `channel`/`windowsAppId`/`windowsAppName`/`logFile` needs a plugin reload (restart DSH, or trigger a reload). Settings writes the DSH settings layer, which outranks the profile patch; use the page's reset/clear to fall back to patch values.
+- **CLI overlays outrank settings**: configuration injected with `dsh --patch <file>` sits in a higher-priority layer, so the Host rejects settings-page writes for such rows (“The save conflicted or the Host rejected it”). That is DSH's protection; a normal profile-patch install is unaffected.
 - **AUMID cleanup**: uninstalling the plugin does not remove `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`; delete it manually if needed.
 - **Restart for code changes**: the running desktop app does not hot-reload loaded ESM modules; restart DeepSeek Harness after upgrading.
 - **Version range**: requires DSH `>=0.2.1-0 <0.3.0`; DSH 0.3+ needs a plugin release first.
+

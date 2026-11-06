@@ -1,4 +1,4 @@
-# DSH 任务通知（dsh-task-notifier）
+﻿# DSH 任务通知（dsh-task-notifier）
 
 > [English](README.en.md) | 中文
 
@@ -26,7 +26,8 @@
 **兼容性与验证**
 
 - 要求 DSH `>=0.2.1-0 <0.3.0`（已在 `0.2.2-rc.1` 实机验证）；Node.js 要求与 DSH 一致（0.2.2 起为 24.9+）；
-- 142 个单元测试（141 通过 + 1 个 POSIX 文件权限用例在 Windows 跳过），CI 覆盖 Ubuntu / Windows / macOS；
+- 149 个单元测试（148 通过 + 1 个 POSIX 文件权限用例在 Windows 跳过），CI 覆盖 Ubuntu / Windows / macOS；
+- **图形化设置页**：DSH 设置 → 任务通知，或插件页该行的**配置**按钮；改动写入 DSH 设置层并实时生效（通道/图标/日志路径等挂载期选项除外）。
 - 已收录到自定义插件索引：<https://lizhijie429.github.io/dsh-task-notifier/index.json>。
 
 ## 安装方式
@@ -71,7 +72,8 @@
 
 - `name` 必须是**绝对路径**（也支持 `file://` URL）；使用包名时需确保该包已在 profile 依赖中；
 - 保存后 `desktop` profile 默认支持 live 热加载；若未挂载，重启一次 DeepSeek Harness；
-- 验证：插件目录下 `state/task-notifier.log` 出现 `plugin.mounted`，且 `agentsAvailable: true`。
+- 验证：插件目录下 `state/task-notifier.log` 出现 `plugin.mounted`，且 `agentsAvailable: true`；
+- **图形化配置**：挂载后打开 **DSH 设置 → 任务通知**，或插件页中该插件的**配置**按钮。页面会读取并编辑同一份配置，保存到 DSH 设置层（优先于 profile patch），无需手改 YAML。
 
 ### 方式二：作为插件包安装到普通 profile（web / headless / 自建）
 
@@ -212,7 +214,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 
 **调试日志**（排障依据）：默认 `<插件目录>/state/task-notifier.log`，JSONL、UTF-8、256KB 轮转；POSIX 权限 `0600`（Windows 继承用户目录 ACL）。日志**保留完整通知标题与正文**，请勿直接公开分享。关键事件包括 `plugin.mounted`、`notification.dispatch/sent/failed`、`auto-continue.*`、`approval.*`、`question.*`、`channel.fallback`、`agent.status`、`observer.error`。
 
-> 本插件刻意不声明 `Config` schema（官方 schema 依赖 `@deepseek-ai/schemastery`，会破坏任意路径零依赖挂载），因此 Settings 页没有图形化配置表单，请直接编辑 profile 的 `cordis.patch.yml`。
+> **图形化设置**：插件声明了 `Config` schema（vendored schemastery/cosmokit，MIT，避免外部路径挂载解析 Host 包），所有字段都是 `.volatile()`，因此 DSH 设置页可以读取并实时写入。页面入口：**设置 → 任务通知**（Settings 侧栏），或插件页该行的**配置**按钮。保存写入 DSH 设置层，优先级高于 profile 的 `cordis.patch.yml`；页面里的「放弃修改」只丢弃草稿，要恢复 patch 值需要在设置层重置或清空对应值。`.volatile()` 之外没有“普通配置”，因此不需要重启即可应用大部分选项。
 
 ## 通知通道
 
@@ -243,7 +245,9 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - **自动继续范围**：只针对网络/模型请求类失败；`AUTH`、无网络特征的 `UNKNOWN`、用户取消等不会继续。严格模式依赖本轮 `llm/retry` 链；热加载后缺少轮次上下文时严格模式会跳过。自动预算保存在内存中，进程重启后重置。
 - **语言与标题**：文案仅 `zh`/`en`；`locale: auto` 只读取 Host 环境变量，不读取单个 Web 客户端的语言设置。标题短标签最多 12 字符，超出以 `…` 截断。
 - **通道探测边界**：只确认系统命令存在，无法校验系统通知权限、桌面通知守护进程是否真的在运行。
-- **无图形化配置**：未声明 `Config` schema，需编辑 profile 的 `cordis.patch.yml`。
+- **图形化设置页的实时范围**：设置保存后大部分选项立即生效；通知通道探测、Windows AUMID 注册、日志文件句柄在挂载时确定，修改 `channel`/`windowsAppId`/`windowsAppName`/`logFile` 后需重载插件（重启 DSH 或重新保存触发重载）。设置写入 DSH 设置层，优先级高于 profile patch；如需回到 patch 值，请在设置页重置或清除该字段。
+- **命令行 overlay 优先级更高**：用 `dsh --patch <file>` 临时注入的配置属于更高优先级层，设置页对这类行的写入会被 Host 拒绝（页面显示「保存冲突或 Host 拒绝了修改」）；这是 DSH 的保护行为，正常 profile patch 安装不受影响。
 - **AUMID 清理**：卸载插件不会自动删除 `HKCU\Software\Classes\AppUserModelId\DSH.TaskNotifier`，需要时可手动删除。
 - **代码更新需重启**：运行中的桌面端不会热重载已加载的 ESM 模块；升级插件后重启一次 DeepSeek Harness。
 - **版本范围**：要求 DSH `>=0.2.1-0 <0.3.0`；DSH 0.3 及以上需要先升级插件版本。
+

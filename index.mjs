@@ -9,14 +9,16 @@
  *    request retry budget was exhausted (`llm/retry` events reached
  *    `maxRetries` and the loop closed the turn with `reason.kind === 'error'`).
  *
- * The plugin is host-only and has no dependencies beyond Node built-ins, so it
- * can be mounted from a profile patch by absolute path without a build step.
+ * The host half has no dependencies beyond Node built-ins (the browser settings
+ * half and the vendored Config schema live beside it and are only loaded by the
+ * matching DSH subsystems), so it can be mounted from a profile patch by
+ * absolute path without a build step.
  *
  * @module dsh-task-notifier
  */
 
 import { fileURLToPath } from 'node:url'
-import { normalizeConfig } from './lib/config.mjs'
+import { cloneConfig, normalizeConfig } from './lib/config.mjs'
 import { createFileLog } from './lib/file-log.mjs'
 import { createNotifier, resolveChannel, resolveEffectiveChannel } from './lib/notify.mjs'
 import { TaskObserver } from './lib/observer.mjs'
@@ -31,6 +33,9 @@ export const name = 'task-notifier'
  * undefined and every continuation is skipped as `agent-gone` (observed
  * 2026-11-04: `agentsAvailable:false` broke auto-continue for all failures).
  */
+/** Loader-enforced config schema; the client settings page and the loader use it. */
+export { Config } from './lib/schema.mjs'
+
 export const inject = ['agents']
 
 const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -64,7 +69,11 @@ export function apply(ctx, rawConfig) {
     return
   }
 
-  const { config, warnings } = normalizeConfig(rawConfig, PLUGIN_DIR)
+  const { config: normalizedConfig, warnings } = normalizeConfig(rawConfig, PLUGIN_DIR)
+  // The settings service edits `.volatile()` fields without remounting the
+  // plugin. Keep one mutable snapshot that the file log, notifier and observer
+  // all share, and refresh it in place on loader/volatile-update.
+  const config = cloneConfig(normalizedConfig)
   const fileLog = createFileLog({ config, logger: { warn: (message) => log('warn', message) } })
   for (const warning of warnings) {
     log('warn', `config: ${warning}`)
@@ -132,6 +141,45 @@ export function apply(ctx, rawConfig) {
   })()
 
   const observer = new TaskObserver({ config, log, fileLog, notifier, agents: agentRegistry })
+
+  // `.volatile()` Config fields (the whole schema) are committed into the
+  // running entry without a remount; refresh the shared snapshot so the
+  // observer and notifier read the new values on their next event. Mount-scoped
+  // decisions (channel probe, Windows AUMID registration, the log file handle)
+  // intentionally keep the values chosen at mount.
+  const reloadVolatileConfig = () => {
+    try {
+      const next = normalizeConfig(rawConfig, PLUGIN_DIR)
+      Object.assign(config, cloneConfig(next.config))
+      for (const warning of next.warnings) {
+        log('warn', `config: ${warning}`)
+        fileLog('config.warning', { warning })
+      }
+      fileLog('config.volatile-update', { config: sanitizedConfig(config) })
+      log('info', `config updated live (reminderMs=${config.reminderMs}, reminderMax=${config.reminderMax})`)
+    } catch (error) {
+      const message = String(error?.message ?? error)
+      log('warn', `config.volatile-update failed: ${message}`)
+      fileLog('config.volatile-update.error', { reason: message })
+    }
+  }
+  if (typeof ctx.on === 'function') {
+    const registerVolatileConfig = () => {
+      const off = ctx.on('loader/volatile-update', reloadVolatileConfig)
+      return () => {
+        try {
+          off?.()
+        } catch {
+          // Disposal is best effort; the loader owns the listener lifecycle.
+        }
+      }
+    }
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(registerVolatileConfig, 'task-notifier: volatile config')
+    } else {
+      registerVolatileConfig()
+    }
+  }
 
   fileLog('plugin.mounted', {
     pid: process.pid,

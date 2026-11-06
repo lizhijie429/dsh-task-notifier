@@ -1,11 +1,12 @@
 {
   "name": "@lizhijie429/dsh-task-notifier",
-  "version": "0.7.0",
-  "description": "DSH Host plugin: monitor agent turn status, send OS notifications (Windows toasts branded with the DSH icon, click-to-focus, sound, reminders, localized copy, short session labels, privacy mode), alert pending approvals and user questions/plan reviews, and auto-continue network/model-request failures.",
+  "version": "0.8.0",
+  "description": "DSH Host plugin: monitor agent turn status, send OS notifications (Windows toasts branded with the DSH icon, click-to-focus, sound, reminders, localized copy, short session labels, privacy mode), alert pending approvals and user questions/plan reviews, auto-continue network/model-request failures, and expose a graphical settings page in the DSH Web client.",
   "type": "module",
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
+    "./client": "./lib/client.js",
     "./icon": "./assets/icon.png",
     "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
@@ -13,6 +14,7 @@
   "files": [
     "index.mjs",
     "lib",
+    "vendor",
     "assets",
     "locale",
     "cordis.patch.yml",
@@ -30,6 +32,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
     }
   },
   "keywords": [
