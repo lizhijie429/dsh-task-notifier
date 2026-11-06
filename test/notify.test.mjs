@@ -140,6 +140,33 @@ test('windows channel keeps the PowerShell identity when no AUMID is supplied', 
   assert.equal(invocations[0].env.DSH_NOTIFY_ICON, undefined)
 })
 
+test('windows toast exposes the localized open action when clickUrl is set', async () => {
+  const invocations = []
+  const notifier = createNotifier({
+    config: { channel: 'windows', clickUrl: 'dsh://open', locale: 'en' },
+    platform: 'win32',
+    run: async (command, args, options) => {
+      invocations.push({ command, args, env: options.env })
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  await notifier.dispatch({ title: 't', body: 'b' })
+  assert.equal(invocations[0].env.DSH_NOTIFY_LAUNCH, 'dsh://open')
+  assert.equal(invocations[0].env.DSH_NOTIFY_ACTION, 'Open DSH')
+
+  const disabled = createNotifier({
+    config: { channel: 'windows', clickUrl: '' },
+    platform: 'win32',
+    run: async (command, args, options) => {
+      invocations.push({ command, args, env: options.env })
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  await disabled.dispatch({ title: 't', body: 'b' })
+  assert.equal(invocations[1].env.DSH_NOTIFY_LAUNCH, undefined)
+  assert.equal(invocations[1].env.DSH_NOTIFY_ACTION, undefined)
+})
+
 test('failed dispatch is reported, never thrown', async () => {
   const notifier = createNotifier({
     config: { channel: 'windows' },

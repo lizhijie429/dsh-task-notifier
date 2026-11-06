@@ -6,6 +6,9 @@ A DSH (DeepSeek Harness) plugin that watches task execution (one task = one `tur
 - Zero runtime dependencies, plain ESM, single directory. Mount it by absolute path — no build or install step.
 - Notification channels: Windows Toast (PowerShell 5.1 / WinRT), macOS `osascript`, Linux `notify-send`, or plain logging.
 - **Windows toasts are branded as DSH** (registers the `DSH.TaskNotifier` AUMID), no longer "Windows PowerShell".
+- **Clicking a toast returns to DSH**: Windows toasts carry an "Open DSH" action and the registered `dsh://open` protocol (focuses the DSH window).
+- **Nothing gets lost**: unanswered approvals/questions repeat every `reminderMs` (default 5 minutes, at most 3 reminders).
+- **Notification copy is localized**: `locale: zh | en | auto` (default Chinese; `auto` follows the host language).
 - Task state is derived only from **durable session events** (`turn/start`, `llm/retry`, `turn/end`, `approval/*`, `tool/call`, `tool/result`) — no guessing from live status.
 - User-action alerts: **approvals** (`approval/asked`) and **questions / plan reviews** (DSH 0.2.2's `ask_user_question` and `exit_plan_mode`) raise an OS notification when they stay pending.
 - Approval alerts: a durable `approval/asked` that is still pending after the grace window raises an OS notification; automatic decisions stay silent.
@@ -19,6 +22,7 @@ dsh-task-notifier/
 ├── cordis.patch.yml       # bundle patch: inserts the default task-notifier row
 ├── lib/
 │   ├── config.mjs         # defaults, validation, normalization (fallback + warning)
+│   ├── i18n.mjs           # notification copy (zh/en) and locale resolution
 │   ├── format.mjs         # event classification, failure codes, notification copy, retry-exhaustion check
 │   ├── notify.mjs         # channel selection, command execution, AppleScript builder
 │   ├── win-appid.mjs      # Windows notification identity (AUMID) registration + icon lookup
@@ -125,6 +129,9 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `approvalGraceMs` | `1000` | Approval grace window: approvals auto-answered within it (policy `never`, automatic grants, cancellation) stay silent |
 | `notifyOnQuestion` | `true` | Notify when DSH waits for an `ask_user_question` answer or a plan review (`exit_plan_mode`) |
 | `questionGraceMs` | `1000` | Question grace window: questions answered within it stay silent (no buzz while you are at the screen) |
+| `locale` | `zh` | Notification copy language: `zh` / `en` / `auto` (follows `DSH_LOCALE`/`LC_ALL`/`LANG`); Chinese by default |
+| `reminderMs` | `300000` | Repeat interval for unanswered approvals/questions (ms, 0 disables, at most 3 reminders) |
+| `clickUrl` | `dsh://open` | Windows toast click/"Open DSH" target; `dsh:`/`http:`/`https:` allowed, `false` disables |
 | `channel` | `auto` | `auto` / `windows` / `macos` / `linux` / `log` / `none` |
 | `titlePrefix` | `DSH` | Notification title prefix (≤60 chars; longer values are truncated with a warning) |
 | `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
@@ -207,6 +214,8 @@ Invalid configuration never throws: each field falls back to its default, the wa
 
 Notifications are **best-effort**: a failure never affects task execution; it is only recorded as `notification.failed`/`notification.log` and in the DSH log.
 
+**Click and reminders**: a Windows toast click opens `clickUrl` (default `dsh://open`, which focuses DSH) and shows an "Open DSH" button; macOS/Linux notifications cannot carry custom actions, so click behavior belongs to the OS. After the first approval/question alert, unanswered items repeat every `reminderMs` (at most 3 times) and stop as soon as `approval/decided` / `tool/result` arrives.
+
 ## Debug log
 
 Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; lines are buffered and flushed in batches, forced on plugin unload). Key events:
@@ -214,8 +223,8 @@ Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; 
 - `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
-- `approval.asked` / `approval.notified` / `approval.decided`: approval alert grace, notification and decision
-- `question.asked` / `question.notified` / `question.pending-notified` / `question.resolved`: question/plan-review alert grace, notification, timed-out-but-answerable alert and resolution
+- `approval.asked` / `approval.notified` / `approval.reminder` / `approval.decided`: approval alert grace, first notification, reminders and decision
+- `question.asked` / `question.notified` / `question.reminder` / `question.pending-notified` / `question.resolved`: question/plan-review alert grace, first notification, reminders, timed-out-but-answerable alert and resolution
 - `agent.status`: every Agent status transition (`running`/`idle`), for diagnosing continuation-turn status ordering
 - `observer.error`: event-handling exceptions (never break the main flow)
 
@@ -228,7 +237,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 118 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus the no-turn-context, plan-review, PTC sub-call and timed-pending cases, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
+All 129 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation, notification copy with a guaranteed continuation outcome, Chinese/English copy and automatic locale resolution, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus no-turn-context, plan-review, PTC sub-call, timed-pending and reminder cases, toast click parameters and localized action labels, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
 
 ### End-to-end verification (performed on this machine)
 
@@ -249,7 +258,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.3.1`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.4.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -264,6 +273,9 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - Approval alerts are OS notifications only (no approve/deny buttons); the decision still happens in the DSH approval panel. Approvals auto-answered inside the grace window (policy `never`, automatic grants, cancellation) are not announced, and an approval requested before the plugin mounted is not retroactively announced.
 - Question/plan-review alerts also carry no answer controls: answer back in the DSH session. Questions answered inside their grace window are not announced; each question alerts at most once (a timed question returning `pending` before the grace timer fires adds a "still answerable after timeout" note, otherwise the first alert stands). A `tool/call` recorded before the plugin mounted is not retroactively announced. The tool names (`ask_user_question`, `exit_plan_mode`) are the current DSH contract; a rename would need a plugin update.
 - Notifications are best-effort: when the queue is full older progress toasts are dropped, and terminal toasts can still be delayed while several sessions fail at once.
+- Reminders repeat every 5 minutes by default, at most 3 times (`reminderMs: 0` disables them); they stop as soon as the approval/question is resolved.
+- Click actions currently work on Windows only (`dsh://open` relies on the DSH desktop app registering the protocol); macOS/Linux click behavior belongs to the OS and the plugin cannot attach actions there.
+- Notification copy supports `zh`/`en`; `locale: auto` reads host environment variables (`DSH_LOCALE`/`LC_ALL`/`LANG`) only, not a per-client Web language setting.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.
 - No `Config` schema is declared (to stay dependency-free), so Settings has no graphical form for this plugin; edit the profile's `cordis.patch.yml` instead.

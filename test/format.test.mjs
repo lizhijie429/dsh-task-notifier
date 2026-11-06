@@ -266,3 +266,45 @@ test('buildNotification marks a timed-out but answerable question', () => {
   })
   assert.match(body, /状态：超时后仍可回答/)
 })
+
+test('buildNotification renders English copy when locale is en', () => {
+  const { title, body } = buildNotification({
+    phase: 'error',
+    label: 'Designer task',
+    durationMs: 63_000,
+    steps: 5,
+    failure: { code: 'SERVER', message: 'upstream 502' },
+    autoContinue: { attempt: 2, max: 3 },
+    locale: 'en',
+    maxBodyChars: 240,
+  })
+  assert.match(title, /Task failed/)
+  assert.match(body, /Session: Designer task/)
+  assert.match(body, /5 steps/)
+  assert.match(body, /Queued “continue” \(2\/3\)/)
+  assert.match(body, /Reason: SERVER: upstream 502/)
+})
+
+test('buildNotification localizes approval and question reminders', () => {
+  const approval = buildNotification({
+    phase: 'approval',
+    label: 'demo',
+    approval: { toolName: 'pwsh', reason: 'escalate sandbox', reminder: true },
+    locale: 'en',
+    maxBodyChars: 240,
+  })
+  assert.match(approval.title, /Approval needed/)
+  assert.match(approval.body, /Tool: pwsh/)
+  assert.match(approval.body, /Status: still pending/)
+
+  const question = buildNotification({
+    phase: 'question',
+    label: 'demo',
+    question: { kind: 'plan-review', summary: 'Refactor the notifier', reminder: true },
+    locale: 'en',
+    maxBodyChars: 240,
+  })
+  assert.match(question.title, /Action needed/)
+  assert.match(question.body, /Type: Plan review/)
+  assert.match(question.body, /Status: still pending/)
+})

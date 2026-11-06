@@ -8,6 +8,9 @@ DSH（DeepSeek Harness）插件：监控任务（= 一个 `turn`）执行状态�
 - 零运行时依赖，纯 ESM 单目录插件，可按绝对路径直接挂载，无需构建/安装。
 - 通知通道：Windows Toast（PowerShell 5.1 WinRT）、macOS `osascript`、Linux `notify-send`，也可降级为纯日志。
 - **Windows Toast 使用 DSH 图标与名称**（注册 `DSH.TaskNotifier` AUMID），不再是 “Windows PowerShell”。
+- **点击 Toast 可回到 DSH**：Windows 通知带「打开 DSH」动作，并注册 `dsh://open` 协议（打开即聚焦 DSH 窗口）。
+- **提醒不丢失**：审批/提问未被处理时，按 `reminderMs`（默认 5 分钟，最多 3 次）重复提醒。
+- **通知文案可切换语言**：`locale: zh | en | auto`，默认中文；`auto` 跟随 Host 语言环境。
 - 状态判定只读**持久化会话事件**（`turn/start`、`llm/retry`、`turn/end`、`approval/*`、`tool/call`、`tool/result`），不猜测运行中状态。
 - 需要你操作的场景会主动提醒：**审批**（`approval/asked`）与**用户提问/计划审批**（DSH 0.2.2 的 `ask_user_question`、`exit_plan_mode`）。
 
@@ -20,7 +23,8 @@ dsh-task-notifier/
 ├── cordis.patch.yml       # bundle patch：插入 task-notifier 默认配置
 ├── lib/
 │   ├── config.mjs         # 默认配置、校验、归一化（非法值回退 + warning）
-│   ├── format.mjs         # 事件分类、失败码、通知文案（中文）、重试耗尽判定
+│   ├── i18n.mjs           # 通知文案（zh/en）与 locale 解析
+│   ├── format.mjs         # 事件分类、失败码、通知文案、重试耗尽判定
 │   ├── notify.mjs         # 通道选择、命令执行、macOS AppleScript 构造
 │   ├── win-appid.mjs      # Windows 通知身份（AUMID）注册与 DSH 图标定位
 │   ├── win-toast.ps1      # Windows Toast（WinRT）+ 托盘气泡兜底
@@ -126,6 +130,9 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `approvalGraceMs` | `1000` | 审批宽限期：在此时间内被自动回答（自动拒绝/自动通过/取消）的审批保持静默 |
 | `notifyOnQuestion` | `true` | DSH 等待你回答 `ask_user_question` 或审批计划（`exit_plan_mode`）时发系统通知 |
 | `questionGraceMs` | `1000` | 提问宽限期：在此时间内被回答的提问保持静默（你就在屏幕前时不会打扰） |
+| `locale` | `zh` | 通知文案语言：`zh` / `en` / `auto`（跟随 `DSH_LOCALE`/`LC_ALL`/`LANG`）；默认中文 |
+| `reminderMs` | `300000` | 未处理的审批/提问重复提醒间隔（毫秒，0 关闭；最多 3 次） |
+| `clickUrl` | `dsh://open` | Windows Toast 点击/「打开 DSH」按钮跳转目标；支持 `dsh:`/`http:`/`https:`，`false` 关闭 |
 | `channel` | `auto` | `auto`/`windows`/`macos`/`linux`/`log`/`none` |
 | `titlePrefix` | `DSH` | 通知标题前缀（≤60 字符，超出截断并告警） |
 | `windowsAppId` | `DSH.TaskNotifier` | Windows Toast 的 AppUserModelID（决定通知中的应用名/图标） |
@@ -208,6 +215,8 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 
 通知是**尽力而为**：失败不会影响任务执行，只写 `notification.failed`/`notification.log` 与 DSH 日志。
 
+**点击与提醒**：Windows Toast 点击默认执行 `clickUrl`（默认 `dsh://open`，聚焦 DSH 窗口）并显示「打开 DSH」按钮；macOS/Linux 系统通知无法附带自定义动作，点击行为由系统决定。审批/提问第一次提醒后，若仍未被处理，按 `reminderMs` 重复提醒（最多 3 次），处理完成（`approval/decided` / `tool/result`）后自动停止。
+
 ## 调试日志
 
 默认：`<插件目录>/state/task-notifier.log`（JSONL，UTF-8，256KB 轮转；先内存缓冲、批量异步落盘，插件卸载时强制 flush）。关键事件：
@@ -215,8 +224,8 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - `plugin.mounted` / `plugin.unmounted`：挂载信息、最终配置、`warnings`（非法配置）、Windows 注册结果
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
 - `auto-continue.pending` / `.sent` / `.skipped` / `.cooldown` / `.error`
-- `approval.asked` / `approval.notified` / `approval.decided`：审批提醒的宽限、通知与决策结果
-- `question.asked` / `question.notified` / `question.pending-notified` / `question.resolved`：提问/计划审批提醒的宽限、通知、超时 pending 通知与结束
+- `approval.asked` / `approval.notified` / `approval.reminder` / `approval.decided`：审批提醒的宽限、首次通知、重复提醒与决策结果
+- `question.asked` / `question.notified` / `question.reminder` / `question.pending-notified` / `question.resolved`：提问/计划审批提醒的宽限、首次通知、重复提醒、超时 pending 通知与结束
 - `agent.status`：每次 Agent 状态切换（`running`/`idle`），用于排查续跑轮次的状态时序
 - `observer.error`：事件处理异常（不会中断主流程）
 
@@ -229,7 +238,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-当前 118 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签（含完成耗时/步数）、授权与用户提问提醒的宽限/静默/清理/无轮次上下文/计划审批/PTC 子调用/timed pending 场景、自动继续状态机与预算/超时/延迟入队、通知队列上限与分级丢弃策略、重复挂载保护与失败释放、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
+当前 129 个用例全部通过（配置归一化与边界、未知键告警、标题截断、通知文案与继续信息保留、中英文文案与 locale 自动解析、会话标题标签、网络/模型失败可继续判定、UNKNOWN 网络兜底、中途挂载续跑、子代理通知抑制与标签（含完成耗时/步数）、授权与用户提问提醒的宽限/静默/清理/无轮次上下文/计划审批/PTC 子调用/timed pending/重复提醒、Toast 点击参数与本地化动作、自动继续状态机与预算/超时/延迟入队、通知队列上限与分级丢弃策略、重复挂载保护与失败释放、通道选择与降级标记、AppleScript 转义、命令执行与超时树终止、AUMID 注册与 OEM 编码解码、日志批量写入与轮转）。
 
 ### 端到端验证（本机已执行）
 
@@ -250,7 +259,7 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 索引登记的是 **Git source**，安装参数为 `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`；发布新版本后重新运行 `npm run market:index` 并提交 `docs/`
 - 索引已用官方校验器 `@deepseek-ai/dsh-plugin-market-index` 校验通过（`parseMarketIndex` + `marketInstallTarget`）
 - 也可以把插件提交到社区目录（PlugBox、awesome-dsh-plugin），但 DSH 官方不收录第三方索引
-- 版本策略：行为变更递增 minor/patch（当前 `0.3.1`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- 版本策略：行为变更递增 minor/patch（当前 `0.4.0`）；发布 npm 包后另一条安装路径为 `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## 已知限制
 
@@ -265,6 +274,9 @@ DSH 没有官方插件仓库：「发现」页只读取**用户自己添加的�
 - 授权提醒只是 OS 通知，不提供“批准/拒绝”按钮；你仍需要在 DSH 审批面板完成操作。宽限期内被自动回答的审批（策略 `never`、自动通过、取消）不会通知；若插件在 `approval/asked` 之后才挂载（热加载），该次审批不会补发提醒。
 - 提问/计划审批提醒同样没有回答入口，需回到 DSH 会话作答；宽限期内已作答不通知；每个提问只提醒一次（timed 提问超时返回 pending 时，若宽限期定时器尚未触发会补一次「超时后仍可回答」，否则沿用首次提醒）；插件在 `tool/call` 之后才挂载不会补发。工具名（`ask_user_question`、`exit_plan_mode`）是当前 DSH 契约，未来若更名需同步升级插件。
 - 通知是“尽力送达”：队列满时会丢弃较旧的进度通知，多会话同时故障时终态通知仍可能排队延迟。
+- 重复提醒默认每 5 分钟一次、最多 3 次（`reminderMs: 0` 关闭）；审批/提问处理完成后立即停止，不会补发历史提醒。
+- 点击动作目前仅 Windows 生效（`dsh://open` 依赖 DSH 桌面端注册协议）；macOS/Linux 的通知点击行为由系统决定，插件无法附加动作。
+- 文案语言支持 `zh`/`en`；`locale: auto` 只读取 Host 环境变量（`DSH_LOCALE`/`LC_ALL`/`LANG`），不读取单个 Web 客户端的语言设置。
 - 如果用户在失败后立刻手动输入，插件检测到待处理的**用户输入**会跳过继续，可能表现为“没有自动继续”（属于预期保护）；后台任务通知、时间快照等系统消息不会阻止继续。
 - `desktop` profile 依赖 Electron 桌面端运行插件；`dsh plugin` CLI 不适用于该 profile。
 - 未声明 `Config` schema（保持零依赖），Settings 页没有本插件的图形化配置表单；请直接编辑 profile 的 `cordis.patch.yml`。

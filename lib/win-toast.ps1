@@ -5,6 +5,8 @@
 #   DSH_NOTIFY_TITLE, DSH_NOTIFY_BODY
 #   DSH_NOTIFY_AUMID (optional)  - registered AppUserModelID to render as DSH
 #   DSH_NOTIFY_ICON  (optional)  - raster image used as the toast banner artwork
+#   DSH_NOTIFY_LAUNCH (optional) - protocol/URL opened when the toast is clicked
+#   DSH_NOTIFY_ACTION (optional) - localized label for the open action button
 #
 # Exit codes: 0 toast shown, 1 toast unavailable (caller falls back to logging).
 # A tray balloon is attempted before giving up on older/blocked toast stacks.
@@ -69,12 +71,27 @@ if ($iconPath) {
     }
 }
 
+# Optional click-through: DSH registers `dsh://` and focuses the app on open.
+# The plugin supplies both values; older callers without them keep the plain
+# toast without an action button.
+$launch = $env:DSH_NOTIFY_LAUNCH
+$actionLabel = $env:DSH_NOTIFY_ACTION
+if ([string]::IsNullOrWhiteSpace($actionLabel)) { $actionLabel = '打开 DSH' }
+$launchAttr = ''
+$actionsXml = ''
+if (-not [string]::IsNullOrWhiteSpace($launch)) {
+    $escapedLaunch = [System.Security.SecurityElement]::Escape($launch)
+    $escapedAction = [System.Security.SecurityElement]::Escape($actionLabel)
+    $launchAttr = " activationType=`"protocol`" launch=`"$escapedLaunch`""
+    $actionsXml = "<actions><action content=`"$escapedAction`" activationType=`"protocol`" arguments=`"$escapedLaunch`"/></actions>"
+}
+
 function Show-Toast([string]$toastAppId) {
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
     $template = @"
-<toast>
+<toast$launchAttr>
   <visual>
     <binding template="ToastGeneric">
       <text>$escapedTitle</text>
@@ -82,6 +99,7 @@ function Show-Toast([string]$toastAppId) {
       $imageXml
     </binding>
   </visual>
+  $actionsXml
 </toast>
 "@
 

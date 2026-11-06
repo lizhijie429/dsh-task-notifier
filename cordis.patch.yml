@@ -26,6 +26,14 @@
         # stay silent.
         notifyOnQuestion: true
         questionGraceMs: 1000
+        # Notification copy language: zh | en | auto (follow the host locale).
+        locale: zh
+        # Repeat an unanswered approval/question alert every 5 minutes
+        # (up to 3 reminders); set 0 to disable.
+        reminderMs: 300000
+        # Clicking the Windows toast opens this target. DSH registers the
+        # `dsh://open` protocol and focuses the app; false disables the action.
+        clickUrl: dsh://open
         # auto | windows | macos | linux | log | none
         channel: auto
         titlePrefix: DSH

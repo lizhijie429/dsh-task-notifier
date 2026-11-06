@@ -164,3 +164,32 @@ test('titlePrefix is capped at 60 characters', () => {
   assert.equal(config.titlePrefix.length, 60)
   assert.ok(warnings.some((warning) => warning.includes('titlePrefix')))
 })
+
+test('friendliness defaults: locale, reminders and click target', () => {
+  const { config } = normalizeConfig(undefined, '/p')
+  assert.equal(config.locale, 'zh')
+  assert.equal(config.reminderMs, 300_000)
+  assert.equal(config.clickUrl, 'dsh://open')
+})
+
+test('locale, reminder and click target normalize defensively', () => {
+  const custom = normalizeConfig({ locale: 'en', reminderMs: 0, clickUrl: 'https://dsh.example/session/1' }, '/p')
+  assert.deepEqual(custom.warnings, [])
+  assert.equal(custom.config.locale, 'en')
+  assert.equal(custom.config.reminderMs, 0, '0 disables reminders')
+  assert.equal(custom.config.clickUrl, 'https://dsh.example/session/1')
+
+  const disabled = normalizeConfig({ clickUrl: false }, '/p')
+  assert.equal(disabled.config.clickUrl, '')
+
+  const invalid = normalizeConfig({ locale: 'fr', reminderMs: -1, clickUrl: 'file:///etc/passwd' }, '/p')
+  assert.equal(invalid.config.locale, 'zh', 'unknown locale falls back to the default')
+  assert.equal(invalid.config.reminderMs, 300_000)
+  assert.equal(invalid.config.clickUrl, 'dsh://open')
+  assert.ok(invalid.warnings.some((warning) => warning.includes('locale')))
+  assert.ok(invalid.warnings.some((warning) => warning.includes('reminderMs')))
+  assert.ok(invalid.warnings.some((warning) => warning.includes('clickUrl')))
+
+  const auto = normalizeConfig({ locale: 'auto' }, '/p')
+  assert.ok(['zh', 'en'].includes(auto.config.locale))
+})
