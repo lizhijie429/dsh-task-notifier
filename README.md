@@ -10,7 +10,7 @@
 
 - **任务状态通知**：完成、失败、取消、阻塞、达到输出上限、意外中断；
 - **需要你操作时提醒**：DSH 审批面板等待授权、`ask_user_question` 提问、计划模式 `exit_plan_mode` 待审批；
-- **提醒不丢失**：审批/提问未被处理时按 `reminderMs` 重复提醒（默认 5 分钟，最多 3 次），处理后立即停止；
+- **提醒不丢失**：审批/提问未被处理时按 `reminderMs` 重复提醒（默认 1 分钟，最多 5 次），并带提示音；处理后立即停止；
 - **点击回到 DSH**：Windows Toast 点击执行 `dsh://open` 并显示「打开 DSH」动作；
 - **自动继续**：网络/模型请求失败后，在 Agent 空闲边自动发送「继续」（预算、冷却、provider 重试延迟均可配置）；
 - **可读性**：标题带短会话标签，支持中英文文案与各状态图标；
@@ -26,7 +26,7 @@
 **兼容性与验证**
 
 - 要求 DSH `>=0.2.1-0 <0.3.0`（已在 `0.2.2-rc.1` 实机验证）；Node.js 要求与 DSH 一致（0.2.2 起为 24.9+）；
-- 140 个单元测试（POSIX 文件权限用例在 Windows 跳过），CI 覆盖 Ubuntu / Windows / macOS；
+- 142 个单元测试（141 通过 + 1 个 POSIX 文件权限用例在 Windows 跳过），CI 覆盖 Ubuntu / Windows / macOS；
 - 已收录到自定义插件索引：<https://lizhijie429.github.io/dsh-task-notifier/index.json>。
 
 ## 安装方式
@@ -52,7 +52,9 @@
         notifyOnQuestion: true
         questionGraceMs: 1000
         locale: zh
-        reminderMs: 300000
+        reminderMs: 60000
+        reminderMax: 5
+        actionSound: true
         clickUrl: dsh://open
         titleSessionLabel: true
         privacyMode: false
@@ -150,9 +152,14 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 
 ### 提醒、标题与点击
 
-- `reminderMs` 默认 300000（5 分钟），每个审批/提问最多 3 次提醒，处理后停止；`0` 关闭；
-- 标题默认附加 ≤12 字符的短会话标签（如 `DSH · ✅ 任务完成 · 设计器任务`），`titleSessionLabel: false` 可关闭；
+- `reminderMs` 默认 60000（1 分钟），每个审批/提问最多 `reminderMax`（默认 5）次提醒，处理后停止；`0` 关闭；
+- **审批/提问/计划审批属于“需要你操作”的提醒，不区分 DSH 是否在前台**：插件不做前台抑制，首次通知在宽限期（默认 1 秒，用于过滤自动决策）后立即发出，并且：
+  - Windows Toast 附带系统提示音（`actionSound: true`，可用 `false` 关闭）；
+  - macOS 通知附带 `Glass` 提示音；
+  - Linux `notify-send` 使用 `-u critical` 紧急级别；
+- 多任务并行时建议保留默认的 1 分钟 × 5 次提醒；若系统开启了勿扰/专注助手，横幅仍可能被系统静音，但声音与重复提醒会持续提示；
 - Windows Toast 点击执行 `clickUrl`（默认 `dsh://open`，聚焦 DSH）并显示「打开 DSH」按钮；macOS/Linux 点击行为由系统决定。
+- 标题默认附加 ≤12 字符的短会话标签（如 `DSH · ✅ 任务完成 · 设计器任务`），`titleSessionLabel: false` 可关闭；
 
 ### 子代理会话
 
@@ -180,7 +187,9 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `notifyOnQuestion` | `true` | 提问/计划审批提醒 |
 | `questionGraceMs` | `1000` | 提问宽限期（0–60000ms） |
 | `locale` | `zh` | 文案语言：`zh` / `en` / `auto`（跟随 `DSH_LOCALE`/`LC_ALL`/`LANG`） |
-| `reminderMs` | `300000` | 未处理审批/提问的重复提醒间隔（0–3600000ms，0 关闭，最多 3 次） |
+| `reminderMs` | `60000` | 未处理审批/提问的重复提醒间隔（0–3600000ms，0 关闭） |
+| `reminderMax` | `5` | 每个未处理审批/提问最多提醒次数（0–10，0 只发首次通知） |
+| `actionSound` | `true` | 审批/提问/计划审批通知是否播放提示音（Windows Toast 声音、macOS Glass 声音；Linux 始终 critical） |
 | `clickUrl` | `dsh://open` | Windows Toast 点击/动作目标；仅允许 `dsh:`/`http:`/`https:`，`false` 关闭 |
 | `titleSessionLabel` | `true` | 标题末尾追加 ≤12 字符短会话标签 |
 | `privacyMode` | `false` | OS 通知隐藏敏感详情；日志仍完整 |
@@ -228,7 +237,8 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 - **未覆盖的通知场景**：后台任务 `job/settled`（DSH 应用内已有通知）、turn 之外的维护错误 `agent/error`、自定义插件直接调用 `userQuestions` 且不产生工具调用事件的提问，均不会触发本插件通知。
 - **内容可见性**：默认通知正文含会话标题、审批工具/原因、提问摘要、失败信息，可能出现在锁屏/通知中心；敏感环境请设 `privacyMode: true`。日志按排障需要**保留完整正文**（POSIX `0600`，Windows 用户 ACL），分享前请自行脱敏。
 - **无决策按钮/会话深链**：通知不含批准/拒绝/回答按钮；点击动作仅 Windows 生效，且只能聚焦 DSH（`dsh://open`），不能定位到具体会话；macOS/Linux 点击行为由系统决定。
-- **提醒次数有限**：默认每 5 分钟提醒一次、最多 3 次；处理完成后停止；插件在 `approval/asked` 或 `tool/call` 之后才挂载时不会补发该次提醒。
+- **提醒次数有限**：默认每 1 分钟提醒一次、最多 5 次（`reminderMax` 可调）；处理完成后停止；插件在 `approval/asked` 或 `tool/call` 之后才挂载时不会补发该次提醒。
+- **前台提醒依赖系统通知设置**：插件本身不做前台抑制，审批/提问/计划审批在宽限期后始终发送；但 Windows 专注助手/勿扰、macOS 专注模式、Linux 桌面通知守护进程仍可能静音横幅或声音。`actionSound` 可关闭提示音；如需更强的系统级提醒，需在操作系统通知设置中允许 DSH 通知。
 - **子代理**：默认静默；开启 `notifySubagents` 后才会通知，且子代理永不自动继续。
 - **自动继续范围**：只针对网络/模型请求类失败；`AUTH`、无网络特征的 `UNKNOWN`、用户取消等不会继续。严格模式依赖本轮 `llm/retry` 链；热加载后缺少轮次上下文时严格模式会跳过。自动预算保存在内存中，进程重启后重置。
 - **语言与标题**：文案仅 `zh`/`en`；`locale: auto` 只读取 Host 环境变量，不读取单个 Web 客户端的语言设置。标题短标签最多 12 字符，超出以 `…` 截断。

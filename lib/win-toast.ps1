@@ -86,6 +86,13 @@ if (-not [string]::IsNullOrWhiteSpace($launch)) {
     $actionsXml = "<actions><action content=`"$escapedAction`" activationType=`"protocol`" arguments=`"$escapedLaunch`"/></actions>"
 }
 
+# Action alerts (approval/question) request the standard notification sound so
+# a foreground DSH window cannot make the alert easy to miss.
+$soundXml = ''
+if ($env:DSH_NOTIFY_SOUND -eq '1') {
+    $soundXml = '<audio src="ms-winsoundevent:Notification.Reminder" loop="false"/>'
+}
+
 function Show-Toast([string]$toastAppId) {
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
@@ -100,6 +107,7 @@ function Show-Toast([string]$toastAppId) {
     </binding>
   </visual>
   $actionsXml
+  $soundXml
 </toast>
 "@
 

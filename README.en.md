@@ -10,7 +10,7 @@
 
 - **Task status notifications**: completed, failed, cancelled, blocked, output limit reached, interrupted;
 - **Action-needed alerts**: pending DSH approvals, `ask_user_question`, and plan-mode `exit_plan_mode` reviews;
-- **No missed work**: unanswered approvals/questions repeat every `reminderMs` (default 5 minutes, at most 3 reminders) and stop once handled;
+- **No missed work**: unanswered approvals/questions repeat every `reminderMs` (default 1 minute, at most 5 reminders) with an alert sound and stop once handled;
 - **Click to return to DSH**: Windows toasts open `dsh://open` and expose an “Open DSH” action;
 - **Auto-continue**: after transient network/model-request failures, submit “继续” on the agent idle edge (budget, cooldown, provider retry delay are configurable);
 - **Readability**: short session labels in titles, Chinese/English copy, phase-specific icons;
@@ -26,7 +26,7 @@
 **Compatibility and verification**
 
 - Requires DSH `>=0.2.1-0 <0.3.0` (verified on `0.2.2-rc.1`); the Node.js requirement matches DSH (24.9+ since 0.2.2);
-- 140 unit tests (the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
+- 142 unit tests (141 pass + the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
 - Listed in the custom plugin index: <https://lizhijie429.github.io/dsh-task-notifier/index.json>.
 
 ## Installation
@@ -52,7 +52,9 @@ The `desktop` profile is owned by the Electron app, so `dsh plugin` and similar 
         notifyOnQuestion: true
         questionGraceMs: 1000
         locale: zh
-        reminderMs: 300000
+        reminderMs: 60000
+        reminderMax: 5
+        actionSound: true
         clickUrl: dsh://open
         titleSessionLabel: true
         privacyMode: false
@@ -150,9 +152,14 @@ One notification per `turn` terminal state (multi-step tool calls do not spam):
 
 ### Reminders, titles and clicks
 
-- `reminderMs` defaults to 300000 (5 minutes); each approval/question gets at most 3 reminders and stops when resolved; `0` disables;
+- `reminderMs` defaults to 60000 (1 minute); each approval/question gets at most `reminderMax` (default 5) reminders and stops when resolved; `0` disables;
+- **Approvals, questions and plan reviews are “action needed” alerts and are not suppressed when DSH is in the foreground.** The plugin never checks focus: the first notification goes out immediately after the grace window (default 1 s, used only to filter automatic decisions), and:
+  - Windows toasts play the standard notification sound (`actionSound: true`, set `false` to mute);
+  - macOS notifications use the `Glass` sound;
+  - Linux `notify-send` uses `-u critical` urgency;
+- With parallel tasks keep the default 1-minute × 5 reminders; if the OS has Focus Assist / Do Not Disturb enabled, the system may still mute banners, but the sound and repetition keep prompting;
+- A Windows toast click opens `clickUrl` (default `dsh://open`, focuses DSH) and shows an "Open DSH" button; macOS/Linux click behavior belongs to the OS.
 - Titles append a ≤12-character short session label (e.g. `DSH · ✅ Task completed · Designer job`); disable with `titleSessionLabel: false`;
-- A Windows toast click opens `clickUrl` (default `dsh://open`, focuses DSH) and shows an “Open DSH” button; macOS/Linux click behavior belongs to the OS.
 
 ### Sub-agent sessions
 
@@ -180,7 +187,9 @@ Every field can be set in the profile patch `config:` block. Unset fields fall b
 | `notifyOnQuestion` | `true` | Question/plan-review alerts |
 | `questionGraceMs` | `1000` | Question grace window (0–60000 ms) |
 | `locale` | `zh` | Copy language: `zh` / `en` / `auto` (follows `DSH_LOCALE`/`LC_ALL`/`LANG`) |
-| `reminderMs` | `300000` | Reminder interval for unanswered approvals/questions (0–3600000 ms, 0 disables, at most 3) |
+| `reminderMs` | `60000` | Reminder interval for unanswered approvals/questions (0–3600000 ms, 0 disables) |
+| `reminderMax` | `5` | Maximum reminders per unanswered approval/question (0–10; 0 keeps only the first alert) |
+| `actionSound` | `true` | Play an alert sound for approval/question/plan-review notifications (Windows toast audio, macOS Glass sound; Linux always uses critical urgency) |
 | `clickUrl` | `dsh://open` | Windows toast click/action target; only `dsh:`/`http:`/`https:`, `false` disables |
 | `titleSessionLabel` | `true` | Append a ≤12-character short session label to the title |
 | `privacyMode` | `false` | Hide sensitive details from OS notifications; the log stays complete |
@@ -228,7 +237,8 @@ Every field can be set in the profile patch `config:` block. Unset fields fall b
 - **Not covered**: background-job completions (`job/settled`, DSH already notifies in-app), maintenance `agent/error` outside a turn, and custom plugins that call `userQuestions` directly without producing a tool-call event.
 - **Content visibility**: by default the body contains the session title, approval tool/reason, question summary and failure details, which may appear on the lock screen/notification center; set `privacyMode: true` in sensitive environments. For troubleshooting the log **keeps the full copy** (POSIX `0600`, Windows user ACL); redact before sharing.
 - **No decision buttons / session deep links**: notifications carry no approve/deny/answer buttons; the click action works on Windows only and focuses DSH (`dsh://open`) without locating the specific session; macOS/Linux click behavior belongs to the OS.
-- **Limited reminders**: 5-minute interval by default, at most 3 reminders, stopping on resolution; an approval/question recorded before the plugin mounted is not retroactively announced.
+- **Limited reminders**: 1-minute interval and at most 5 reminders by default (`reminderMax` is configurable), stopping on resolution; an approval/question recorded before the plugin mounted is not retroactively announced.
+- **Foreground alerts depend on OS notification settings**: the plugin never suppresses notifications based on focus, so approvals/questions/plan reviews always fire after the grace window; however Windows Focus Assist / Do Not Disturb, macOS Focus, or a missing Linux notification daemon can still mute banners or sounds. `actionSound` can mute the sound; for stronger system-level alerts allow DSH notifications in the OS settings.
 - **Sub-agents**: silent by default; enable `notifySubagents` to receive them. Sub-agents never auto-continue.
 - **Auto-continue scope**: only network/model-request failures; `AUTH`, non-network `UNKNOWN` and user aborts never continue. Strict mode depends on the turn's `llm/retry` chain; after a hot reload without turn context strict mode skips. The budget lives in memory and resets when the process restarts.
 - **Language and titles**: copy supports `zh`/`en`; `locale: auto` reads host environment variables only, not a per-client Web language setting. The short title label is capped at 12 characters (truncated with `…`).

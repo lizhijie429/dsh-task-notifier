@@ -242,6 +242,8 @@ function sanitizedConfig(config) {
     questionGraceMs: config.questionGraceMs,
     locale: config.locale,
     reminderMs: config.reminderMs,
+    reminderMax: config.reminderMax,
+    actionSound: config.actionSound,
     clickUrl: config.clickUrl,
     titleSessionLabel: config.titleSessionLabel,
     privacyMode: config.privacyMode,

@@ -28,9 +28,13 @@
         questionGraceMs: 1000
         # Notification copy language: zh | en | auto (follow the host locale).
         locale: zh
-        # Repeat an unanswered approval/question alert every 5 minutes
-        # (up to 3 reminders); set 0 to disable.
-        reminderMs: 300000
+        # Repeat an unanswered approval/question alert every 1 minute (up to 5
+        # reminders) so parallel tasks are not missed; set 0 to disable.
+        reminderMs: 60000
+        reminderMax: 5
+        # Play an audible alert for approval/question notifications (Windows
+        # toast sound / macOS notification sound).
+        actionSound: true
         # Clicking the Windows toast opens this target. DSH registers the
         # `dsh://open` protocol and focuses the app; false disables the action.
         clickUrl: dsh://open

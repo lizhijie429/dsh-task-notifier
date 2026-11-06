@@ -37,6 +37,41 @@ test('AppleScript escaping quotes, backslashes and newlines', () => {
     buildAppleScript('DSH · 任务完成', '会话：demo'),
     'display notification "会话：demo" with title "DSH · 任务完成"',
   )
+  assert.equal(
+    buildAppleScript('DSH · 需要授权', '会话：demo', true),
+    'display notification "会话：demo" with title "DSH · 需要授权" sound name "Glass"',
+  )
+})
+
+test('action alerts request sound on Windows and critical urgency on Linux', async () => {
+  const windowsRuns = []
+  const windows = createNotifier({
+    config: { channel: 'windows' },
+    platform: 'win32',
+    run: async (command, args, options) => {
+      windowsRuns.push(options.env)
+      return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+    },
+  })
+  await windows.dispatch({ title: 'approval', body: 'b' }, { phase: 'approval' })
+  await windows.dispatch({ title: 'complete', body: 'b' }, { phase: 'complete' })
+  assert.equal(windowsRuns[0].DSH_NOTIFY_SOUND, '1')
+  assert.equal(windowsRuns[1].DSH_NOTIFY_SOUND, '0')
+
+  const linuxRuns = []
+  const linux = createNotifier({
+    config: { channel: 'linux' },
+    platform: 'linux',
+    linuxIconPath: '',
+    run: async (command, args) => {
+      linuxRuns.push({ command, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  await linux.dispatch({ title: 'question', body: 'b' }, { phase: 'question' })
+  await linux.dispatch({ title: 'complete', body: 'b' }, { phase: 'complete' })
+  assert.deepEqual(linuxRuns[0].args.slice(0, 4), ['-a', 'DSH', '-u', 'critical'])
+  assert.equal(linuxRuns[1].args.includes('-u'), false)
 })
 
 test('runCommand captures stdout and exit codes', async () => {

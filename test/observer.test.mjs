@@ -997,7 +997,7 @@ test('a pending approval repeats a reminder until it is decided', async () => {
   assert.doesNotMatch(harness.notifications[0].body, /仍未处理/)
 
   const reminderTimer = harness.timers.at(-1)
-  assert.equal(reminderTimer.delay, 300_000)
+  assert.equal(reminderTimer.delay, 60_000)
   reminderTimer.fn()
   await flushMicrotasks()
   assert.equal(harness.notifications.length, 2)
@@ -1019,7 +1019,7 @@ test('a pending question repeats a reminder until it is answered', async () => {
   assert.equal(harness.notifications.length, 1)
 
   const reminderTimer = harness.timers.at(-1)
-  assert.equal(reminderTimer.delay, 300_000)
+  assert.equal(reminderTimer.delay, 60_000)
   reminderTimer.fn()
   await flushMicrotasks()
   assert.equal(harness.notifications.length, 2)
@@ -1030,6 +1030,22 @@ test('a pending question repeats a reminder until it is answered', async () => {
   const nextTimer = harness.timers.at(-1)
   harness.observer.onSessionEvent(harness.session, toolResultOf('call-q1'))
   assert.ok(!harness.timers.includes(nextTimer), 'the answer clears the next reminder')
+})
+
+test('reminderMax stops the repeat chain', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent, config: makeConfig({ reminderMax: 1 }) })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+
+  const reminder = harness.timers.at(-1)
+  reminder.fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 2)
+  assert.equal(harness.timers.length, 2, 'fired timers only; no third reminder is scheduled')
 })
 
 test('reminders can be disabled with reminderMs: 0', async () => {
