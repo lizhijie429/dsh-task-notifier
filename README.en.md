@@ -9,6 +9,7 @@ A DSH (DeepSeek Harness) plugin that watches task execution (one task = one `tur
 - **Clicking a toast returns to DSH**: Windows toasts carry an "Open DSH" action and the registered `dsh://open` protocol (focuses the DSH window).
 - **Nothing gets lost**: unanswered approvals/questions repeat every `reminderMs` (default 5 minutes, at most 3 reminders).
 - **Notification copy is localized**: `locale: zh | en | auto` (default Chinese; `auto` follows the host language).
+- **Privacy mode**: `privacyMode: true` keeps approval reasons and question text out of lock-screen notifications ("Details are available in DSH"); the debug log still keeps the full copy.
 - **Titles carry a short session label** (e.g. `DSH · ✅ Task completed · Designer job`) so parallel sessions are distinguishable; disable with `titleSessionLabel: false`.
 - **Channel auto-detection**: `channel: auto` checks that the OS helper exists and falls back to `log` with a warning instead of failing silently.
 - Task state is derived only from **durable session events** (`turn/start`, `llm/retry`, `turn/end`, `approval/*`, `tool/call`, `tool/result`) — no guessing from live status.
@@ -135,6 +136,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 | `reminderMs` | `300000` | Repeat interval for unanswered approvals/questions (ms, 0 disables, at most 3 reminders) |
 | `clickUrl` | `dsh://open` | Windows toast click/"Open DSH" target; `dsh:`/`http:`/`https:` allowed, `false` disables |
 | `titleSessionLabel` | `true` | Append a ≤12-character short session label to the title for parallel sessions |
+| `privacyMode` | `false` | Hide sensitive details (approval reason, question text, failure message) from OS notifications; the debug log keeps the full copy |
 | `channel` | `auto` | `auto` / `windows` / `macos` / `linux` / `log` / `none` |
 | `titlePrefix` | `DSH` | Notification title prefix (≤60 chars; longer values are truncated with a warning) |
 | `windowsAppId` | `DSH.TaskNotifier` | AppUserModelID for Windows toasts (app name/icon in the toast) |
@@ -205,6 +207,10 @@ Invalid configuration never throws: each field falls back to its default, the wa
 - Per-session state is cleaned up on `session/disposed` or plugin unload; timers carry a generation check to ignore stale callbacks.
 - Subagent sessions are silent by default (`notifySubagents: false`) and never auto-continue.
 - Unknown `turn/end` reason kinds (e.g. `forked`) are not reported as success.
+- **Notification helpers get a minimal environment**: only PATH, SystemRoot/TEMP, HOME, DISPLAY/DBUS and LANG/LC_* pass through — the Host's provider API keys, GitHub tokens and proxy credentials are **not** inherited; `reg.exe`/`taskkill` use the same allowlist.
+- **The debug log keeps the full notification copy** (the troubleshooting record): `notification.dispatch` / `notification.sent` / `notification.failed` contain the complete title and body; on POSIX the log file is created with mode `0600` (Windows inherits the user-profile ACL). Redact before sharing it.
+- **Lock-screen privacy**: `privacyMode: true` hides approval reasons, question text and failure details from OS notifications (the body only says "Details are available in DSH"); the debug log still keeps the full copy.
+- **Late answers count as human input**: DSH 0.2.2's `user-question-reply` blocks auto-continue so "continue" cannot overwrite the user's answer to a pending question.
 
 ## Notification channels
 
@@ -221,7 +227,7 @@ Notifications are **best-effort**: a failure never affects task execution; it is
 
 ## Debug log
 
-Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; lines are buffered and flushed in batches, forced on plugin unload). Key events:
+Default: `<plugin dir>/state/task-notifier.log` (JSONL, UTF-8, 256 KB rotation; lines are buffered and flushed in batches, forced on plugin unload; POSIX mode `0600`). The log **keeps the complete notification bodies and event details** as the troubleshooting record; redact it before sharing. Key events:
 
 - `plugin.mounted` / `plugin.unmounted`: mount info, final config, `warnings` (invalid config), Windows registration result
 - `notification.dispatch` / `notification.sent` / `notification.failed` / `notification.log`
@@ -240,7 +246,7 @@ cd "$env:USERPROFILE\.dsh\plugins\dsh-task-notifier"
 node --test test/config.test.mjs test/format.test.mjs test/observer.test.mjs test/notify.test.mjs test/win-appid.test.mjs
 ```
 
-All 133 cases currently pass (config normalization and bounds, unknown-key warnings, title truncation and the short session label, notification copy with a guaranteed continuation outcome, Chinese/English copy and automatic locale resolution, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus no-turn-context, plan-review, PTC sub-call, timed-pending and reminder cases, channel probing and fallback, toast click parameters and localized action labels, the Linux icon and `--` separator, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation).
+All 140 cases currently pass (the POSIX file-mode case is skipped on Windows): config normalization and bounds, unknown-key warnings, title truncation and the short session label, notification copy with a guaranteed continuation outcome, Chinese/English copy and automatic locale resolution, session-title labels, network/model-request continuability, the UNKNOWN network fallback, mid-turn mount continuation, sub-agent suppression and labels including completion duration/steps, approval and user-question alert grace/silence/cleanup plus no-turn-context, plan-review, PTC sub-call, timed-pending and reminder cases, channel probing and fallback, toast click parameters and localized action labels, the Linux icon and `--` separator, privacy-mode redaction with full debug logs, the minimal child environment, `user-question-reply` human-input detection, the auto-continue state machine with budget/timeout/deferred-admit paths, the notification queue cap and priority drop policy, duplicate-mount protection with failed-mount release, channel selection and degradation markers, AppleScript escaping, command execution with tree-kill on timeout, AUMID registration and OEM-code-page decoding, batched debug-log writes and rotation.
 
 ### End-to-end verification (performed on this machine)
 
@@ -261,7 +267,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - The index lists a **Git source**; the install spec is `git+https://github.com/lizhijie429/dsh-task-notifier.git#<commit>`. Re-run `npm run market:index` after each release and commit `docs/`
 - Validated with the official `@deepseek-ai/dsh-plugin-market-index` validator (`parseMarketIndex` + `marketInstallTarget`)
 - Community listings (PlugBox, awesome-dsh-plugin) are optional; DSH itself does not collect third-party indexes
-- Release policy: bump the version for behavior changes (currently `0.5.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
+- Release policy: bump the version for behavior changes (currently `0.6.0`); after an npm publish the other install path is `dsh plugin add "@lizhijie429/dsh-task-notifier"`
 
 ## Known limitations
 
@@ -280,6 +286,7 @@ DSH has no official plugin registry: the **Discover** page only reads index sour
 - Click actions currently work on Windows only (`dsh://open` relies on the DSH desktop app registering the protocol); macOS/Linux click behavior belongs to the OS and the plugin cannot attach actions there.
 - Notification copy supports `zh`/`en`; `locale: auto` reads host environment variables (`DSH_LOCALE`/`LC_ALL`/`LANG`) only, not a per-client Web language setting.
 - The short title label is capped at 12 characters (truncated with `…`); the full label stays in the body. `titleSessionLabel: false` hides it.
+- `privacyMode` only affects OS notifications; **the debug log keeps the full copy** (the troubleshooting record). The file is `0600` on POSIX and inherits the user-profile ACL on Windows; redact it before sharing.
 - Channel probing only checks that the OS helper exists (PowerShell / `osascript` / `notify-send`); it cannot verify notification permissions, Focus/Do Not Disturb, or that a desktop notification daemon is actually running.
 - If the user types right after a failure, the plugin detects pending **user input** and skips the continuation (intentional protection; this can look like "no auto-continue"). Background-job notices, time-context snapshots and other system messages do **not** block it.
 - The `desktop` profile relies on the Electron app to run plugins; the `dsh plugin` CLI does not apply to it.

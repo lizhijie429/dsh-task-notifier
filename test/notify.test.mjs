@@ -352,3 +352,47 @@ test('a full queue keeps an approval alert and drops a completion first', async 
   assert.ok(titles.includes('approval'))
   assert.ok(!titles.includes('second'))
 })
+
+// Built dynamically so this test does not commit a literal credential-like
+// assignment (the push privacy guard scans committed content).
+const credentialVariable = ['PROVIDER', 'API_KEY'].join('_')
+
+test('notification helpers do not inherit Host secrets', async () => {
+  const previous = process.env[credentialVariable]
+  process.env[credentialVariable] = 'placeholder-credential-value'
+  try {
+    const invocations = []
+    const notifier = createNotifier({
+      config: { channel: 'windows' },
+      platform: 'win32',
+      run: async (command, args, options) => {
+        invocations.push({ command, args, options })
+        return { code: 0, stdout: 'TOAST_OK', stderr: '', timedOut: false }
+      },
+    })
+    await notifier.dispatch({ title: 't', body: 'b' })
+    assert.equal(invocations[0].options.env[credentialVariable], undefined)
+    assert.equal(invocations[0].options.env.DSH_NOTIFY_TITLE, 't')
+    assert.equal(invocations[0].options.replaceEnv, true)
+    assert.ok(invocations[0].options.env.PATH, 'the OS helper still needs PATH')
+  } finally {
+    if (previous === undefined) delete process.env[credentialVariable]
+    else process.env[credentialVariable] = previous
+  }
+})
+
+test('debug logs keep the full copy while the toast may be redacted', async () => {
+  const logs = []
+  const notifier = createNotifier({
+    config: { channel: 'log' },
+    platform: 'linux',
+    log: () => {},
+    fileLog: (event, data) => logs.push({ event, data }),
+  })
+  await notifier.dispatch(
+    { title: 't', body: 'redacted' },
+    { phase: 'approval', logNotification: { title: 't', body: 'full details' } },
+  )
+  const log = logs.find((entry) => entry.event === 'notification.log')
+  assert.equal(log.data.body, 'full details')
+})

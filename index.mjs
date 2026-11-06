@@ -244,6 +244,7 @@ function sanitizedConfig(config) {
     reminderMs: config.reminderMs,
     clickUrl: config.clickUrl,
     titleSessionLabel: config.titleSessionLabel,
+    privacyMode: config.privacyMode,
     channel: config.channel,
     titlePrefix: config.titlePrefix,
     windowsAppId: config.windowsAppId,

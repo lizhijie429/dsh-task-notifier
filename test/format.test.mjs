@@ -335,3 +335,37 @@ test('the title appends a short session label and can be disabled', () => {
   })
   assert.equal(disabled.title, 'DSH · ✅ 任务完成')
 })
+
+test('privacyMode hides sensitive details from the OS notification copy', () => {
+  const approval = buildNotification({
+    phase: 'approval',
+    label: 'demo',
+    approval: { toolName: 'pwsh', reason: 'escalate sandbox to danger-full-access' },
+    privacyMode: true,
+    maxBodyChars: 240,
+  })
+  assert.doesNotMatch(approval.body, /pwsh/)
+  assert.doesNotMatch(approval.body, /escalate sandbox/)
+  assert.match(approval.body, /详情请在 DSH 中查看/)
+
+  const question = buildNotification({
+    phase: 'question',
+    label: 'demo',
+    question: { kind: 'question', summary: '临时目录放在哪里？', count: 1 },
+    privacyMode: true,
+    maxBodyChars: 240,
+  })
+  assert.doesNotMatch(question.body, /临时目录/)
+  assert.match(question.body, /类型：问题/)
+  assert.match(question.body, /详情请在 DSH 中查看/)
+
+  const failure = buildNotification({
+    phase: 'error',
+    label: 'demo',
+    failure: { code: 'SERVER', message: 'upstream 502 with internal host' },
+    privacyMode: true,
+    maxBodyChars: 240,
+  })
+  assert.match(failure.body, /原因：SERVER/)
+  assert.doesNotMatch(failure.body, /upstream 502 with internal host/)
+})

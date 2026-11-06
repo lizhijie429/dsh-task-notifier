@@ -38,13 +38,15 @@ function makeAgent(options = {}) {
 
 function makeObserver(observerOptions = {}) {
   const notifications = []
+  const notificationMetas = []
   const fileLogs = []
   const timers = []
   const clock = { now: 1_000_000 }
   const config = observerOptions.config ?? makeConfig()
   const notifier = {
-    async dispatch(notification) {
+    async dispatch(notification, meta) {
       notifications.push(notification)
+      notificationMetas.push(meta)
       return { ok: true }
     },
   }
@@ -66,7 +68,7 @@ function makeObserver(observerOptions = {}) {
       if (index >= 0) timers.splice(index, 1)
     },
   })
-  return { observer, notifications, fileLogs, timers, clock, agent }
+  return { observer, notifications, notificationMetas, fileLogs, timers, clock, agent }
 }
 
 function flushMicrotasks() {
@@ -374,6 +376,11 @@ test('inboxBusy and createPluginMessage are defensive', () => {
   // Unidentifiable entries stay conservative: they may be legacy human input.
   assert.equal(inboxBusy({ inbox: { nextTurn: [], nextStep: [{ id: 'x' }] } }), true)
   assert.equal(inboxBusy({ inbox: { nextTurn: [{ id: 'x', source: { kind: 'user' } }], nextStep: [] } }), true)
+  assert.equal(
+    inboxBusy({ inbox: { nextTurn: [{ id: 'x', source: { kind: 'user-question-reply' } }], nextStep: [] } }),
+    true,
+    'a late answer to a pending question is human input too',
+  )
   // System-generated entries must not block continuation.
   assert.equal(inboxBusy({ inbox: { nextTurn: [], nextStep: [{ id: 'x', source: { kind: 'tool-jobs' } }] } }), false)
   assert.equal(inboxBusy({ inbox: { nextTurn: [{ id: 'x', source: { kind: 'time-context' } }], nextStep: [] } }), false)
@@ -1034,4 +1041,22 @@ test('reminders can be disabled with reminderMs: 0', async () => {
   await flushMicrotasks()
   assert.equal(harness.notifications.length, 1)
   assert.equal(harness.timers.length, 1, 'only the fired timer object remains; none is rescheduled')
+})
+
+test('privacyMode redacts the OS notification but logs the full copy', async () => {
+  const { agent } = makeAgent()
+  const harness = makeObserver({ agent, config: makeConfig({ privacyMode: true }) })
+  harness.session = makeSession()
+  harness.observer.onSessionEvent(harness.session, approvalAsked())
+  harness.timers[0].fn()
+  await flushMicrotasks()
+  assert.equal(harness.notifications.length, 1)
+  assert.doesNotMatch(harness.notifications[0].body, /escalate sandbox/)
+  assert.match(harness.notifications[0].body, /详情请在 DSH 中查看/)
+
+  const dispatchLog = harness.fileLogs.find((entry) => entry.event === 'notification.dispatch')
+  assert.match(dispatchLog.data.body, /escalate sandbox/, 'the debug log keeps the full copy')
+  assert.equal(dispatchLog.data.privacyMode, true)
+  assert.equal(dispatchLog.data.redacted, true)
+  assert.match(harness.notificationMetas[0].logNotification.body, /escalate sandbox/)
 })

@@ -171,6 +171,7 @@ test('friendliness defaults: locale, reminders and click target', () => {
   assert.equal(config.reminderMs, 300_000)
   assert.equal(config.clickUrl, 'dsh://open')
   assert.equal(config.titleSessionLabel, true)
+  assert.equal(config.privacyMode, false)
 })
 
 test('locale, reminder and click target normalize defensively', () => {
@@ -198,4 +199,5 @@ test('locale, reminder and click target normalize defensively', () => {
   const badTitle = normalizeConfig({ titleSessionLabel: 'yes' }, '/p')
   assert.equal(badTitle.config.titleSessionLabel, true)
   assert.ok(badTitle.warnings.some((warning) => warning.includes('titleSessionLabel')))
+  assert.equal(normalizeConfig({ privacyMode: true }, '/p').config.privacyMode, true)
 })

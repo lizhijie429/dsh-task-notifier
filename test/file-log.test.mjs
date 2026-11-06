@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -39,6 +39,19 @@ test('buffered lines flush on the next tick without an explicit flush', async ()
     log('tick')
     await new Promise((resolve) => setImmediate(resolve))
     assert.match(readFileSync(path, 'utf8'), /"event":"tick"/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the debug log file is owner-only on POSIX', { skip: process.platform === 'win32' }, () => {
+  const dir = tempDir()
+  try {
+    const path = join(dir, 'log.jsonl')
+    const log = createFileLog({ config: { logFile: path } })
+    log('private', { body: 'full troubleshooting copy' })
+    log.flush()
+    assert.equal(statSync(path).mode & 0o777, 0o600)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

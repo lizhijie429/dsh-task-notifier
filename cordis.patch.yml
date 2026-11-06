@@ -37,6 +37,9 @@
         # Append a short session label to the title (e.g. "… · 设计器任务") so
         # concurrent sessions are distinguishable; false hides it.
         titleSessionLabel: true
+        # Hide sensitive details (approval reasons, question text, failure
+        # messages) from OS notifications; the debug log keeps the full copy.
+        privacyMode: false
         # auto | windows | macos | linux | log | none
         channel: auto
         titlePrefix: DSH
