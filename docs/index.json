@@ -41,11 +41,11 @@
       "versions": [
         {
           "version": "0.6.0",
-          "publishTimestamp": 1793938495,
+          "publishTimestamp": 1793940572,
           "source": {
             "type": "git",
             "url": "https://github.com/lizhijie429/dsh-task-notifier",
-            "commit": "59fbcb1dc3fc89690abc09406ab3d41e8de88881"
+            "commit": "a2c8ab9988f79d0da67c129905bb16d60d12b8f7"
           },
           "engines": {
             "dsh": ">=0.2.1-0 <0.3.0"
