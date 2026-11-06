@@ -36,16 +36,16 @@
         ]
       },
       "dist-tags": {
-        "latest": "0.3.1"
+        "latest": "0.4.0"
       },
       "versions": [
         {
-          "version": "0.3.1",
-          "publishTimestamp": 1793935223,
+          "version": "0.4.0",
+          "publishTimestamp": 1793936967,
           "source": {
             "type": "git",
             "url": "https://github.com/lizhijie429/dsh-task-notifier",
-            "commit": "04e2a0ef648660a0cbc14f69238a67b2fbf64381"
+            "commit": "14021f64a6423b9041cc43bacb6cb4e9679d0893"
           },
           "engines": {
             "dsh": ">=0.2.1-0 <0.3.0"
