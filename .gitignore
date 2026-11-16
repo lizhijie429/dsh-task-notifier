@@ -26,6 +26,7 @@ dist/
 
 # Editor and OS cruft.
 .idea/
+.vscode/
 .DS_Store
 Thumbs.db
 desktop.ini
