@@ -1,7 +1,31 @@
 # Runtime artifacts produced by the plugin (JSONL debug log, rotated copy).
 state/
 
+# Local scratch space. dsh-root-temp-guard makes `tmp/` the sanctioned place for
+# temporary work products, so reviews/probes/logs written there stay untracked.
+tmp/
+
 # Node / packaging artifacts.
 node_modules/
 *.tgz
 .npmrc
+
+# Logs: no tracked file ends in .log (checked with `git ls-files`), and all
+# plugin log output is written under state/. This also covers npm-debug.log*,
+# yarn-debug.log*, yarn-error.log* and pnpm-debug.log*.
+*.log
+
+# Local environment files. The .env.example template stays committable.
+.env*
+!.env.example
+
+# Test/build output. There is no build step today; kept as a safety net for
+# generated bundles and coverage reports.
+coverage/
+dist/
+
+# Editor and OS cruft.
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

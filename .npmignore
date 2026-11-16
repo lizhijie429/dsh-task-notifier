@@ -1,0 +1,37 @@
+# Defensive ignore list only.
+#
+# package.json declares a "files" allowlist (index.mjs, lib, vendor, assets,
+# locale, cordis.patch.yml, README.md, README.en.md, LICENSE), and npm treats
+# that allowlist as authoritative: with "files" present this file has NO effect
+# on the tarball. Verified empirically in this repo:
+#   - `npm pack --dry-run --json` lists the same 29 entries with and without
+#     this file, even when it contains `lib/` and `assets/` (which stayed in).
+#   - A decoy root file absent from "files" is excluded either way; the same
+#     decoy IS packed once "files" is removed, and IS excluded again by this
+#     file in that situation.
+# So the real protection is "files"; these rules are a safety net that only
+# takes effect if the "files" allowlist is ever removed.
+#
+# Rules mirror .gitignore, applied to the publish payload instead of git.
+.github/
+.vscode/
+state/
+tmp/
+test/
+scripts/
+docs/
+coverage/
+
+# Never publish credentials or local env files.
+.env*
+.npmrc
+
+# Packaging leftovers and generated logs.
+*.tgz
+*.log
+
+# Runtime/editor cruft.
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/

@@ -26,7 +26,9 @@
 **兼容性与验证**
 
 - 要求 DSH `>=0.2.1-0 <0.3.0`（已在 `0.2.2-rc.1` 实机验证）；Node.js 要求与 DSH 一致（0.2.2 起为 24.9+）；
-- 151 个单元测试（150 通过 + 1 个 POSIX 文件权限用例在 Windows 跳过），CI 覆盖 Ubuntu / Windows / macOS；
+- 152 个单元测试（151 通过 + 1 个 POSIX 文件权限用例在 Windows 跳过），CI 覆盖 Ubuntu / Windows / macOS；
+- `npm test` 与 `npm run market:index` 只在仓库检出中可用：`test/`、`scripts/`、`docs/` 不随 npm 包发布（安装后的包内没有测试脚本）；
+- 发布包经 `npm pack` 校验：29 个文件，`assets/`、`locale/`、`vendor/`、`lib/win-toast.ps1` 等运行时资源全部在包内，`state/`、`test/`、`scripts/`、`docs/`、`tmp/` 均不入包；`npm publish` 会先由 `prepublishOnly` 自动运行 `npm test`；
 - **图形化设置页**：DSH 设置 → 任务通知，或插件页该行的**配置**按钮；改动写入插件 `state/user-settings.json` 并实时生效（通道/图标/日志路径等挂载期选项除外）。
 - 已收录到自定义插件索引：<https://lizhijie429.github.io/dsh-task-notifier/index.json>。
 
@@ -229,7 +231,7 @@ dsh headless --patch "$env:TEMP\task-notifier.patch.yml" "只回复 OK，不要�
 
 **投递策略**：通知是尽力而为、异步 fire-and-forget，失败不影响任务执行。队列上限 20，满时按优先级丢弃：`step`/`start` → `complete` → 其他终态，**审批/提问提醒最后才丢**。进度类 Toast 超时 6 秒，终态 12 秒；Windows 超时会用 `taskkill /T /F` 终止整棵子进程树。
 
-**子进程最小环境变量**：PowerShell / osascript / notify-send / reg.exe / taskkill 只继承 PATH、SystemRoot/TEMP、HOME、DISPLAY/DBUS、LANG/LC_* 等必要变量，不会拿到 Host 的 provider 凭据或 token。
+**子进程最小环境变量**：PowerShell / osascript / notify-send / reg.exe / taskkill 只继承白名单内的桌面与区域设置变量——Windows 为 `SystemRoot`/`SystemDrive`/`windir`/`TEMP`/`TMP`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`APPDATA`/`LOCALAPPDATA`/`PATH`/`PSModulePath`/`PATHEXT`/`COMSPEC`/`PROCESSOR_ARCHITECTURE`/`USERNAME`，macOS 为 `HOME`/`PATH`/`TMPDIR`/`LANG`/`USER`/`SHELL`，Linux 为 `HOME`/`PATH`/`DISPLAY`/`WAYLAND_DISPLAY`/`DBUS_SESSION_BUS_ADDRESS`/`XDG_*`/`LANG`/`USER`/`SHELL`/`TMPDIR`（见 `lib/child-env.mjs`）。**任何凭据类变量（API key、token、代理密码等）都不在白名单内**，因此不会传给子进程。
 
 ## 已知限制
 

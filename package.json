@@ -8,6 +8,8 @@
     ".": "./index.mjs",
     "./client": "./lib/client.js",
     "./icon": "./assets/icon.png",
+    "./lib/*": "./lib/*",
+    "./assets/*": "./assets/*",
     "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
@@ -23,10 +25,12 @@
     "LICENSE"
   ],
   "engines": {
+    "node": ">=24.9",
     "dsh": ">=0.2.1-0 <0.3.0"
   },
   "scripts": {
     "test": "node --test \"test/*.test.mjs\"",
+    "prepublishOnly": "npm test",
     "market:index": "node scripts/update-market-index.mjs"
   },
   "dsh": {

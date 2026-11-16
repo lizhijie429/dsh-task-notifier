@@ -1,0 +1,8 @@
+# Repository-wide line-ending policy: store LF in the repository and let the
+# platform decide the working-tree ending (core.autocrlf / core.eol). This makes
+# the normal form explicit instead of depending on each clone's git config.
+* text=auto
+
+# Binary assets: keep bytes verbatim, no EOL conversion, no textual diff.
+*.png binary
+*.ico binary

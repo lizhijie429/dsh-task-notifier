@@ -26,7 +26,9 @@
 **Compatibility and verification**
 
 - Requires DSH `>=0.2.1-0 <0.3.0` (verified on `0.2.2-rc.1`); the Node.js requirement matches DSH (24.9+ since 0.2.2);
-- 151 unit tests (150 pass + the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
+- 152 unit tests (151 pass + the POSIX file-permission case is skipped on Windows); CI covers Ubuntu / Windows / macOS;
+- `npm test` and `npm run market:index` exist only in a repository checkout: `test/`, `scripts/` and `docs/` are not published in the npm package (the installed package ships no test scripts);
+- The published payload is verified with `npm pack`: 29 files, with every runtime resource included (`assets/`, `locale/`, `vendor/`, `lib/win-toast.ps1`); `state/`, `test/`, `scripts/`, `docs/` and `tmp/` are excluded; `npm publish` runs `npm test` first through `prepublishOnly`;
 - **Graphical settings page**: DSH Settings → Task Notifier, or the plugin row's **Configure** button. Changes write to the plugin's `state/user-settings.json` and apply live (except mount-scoped options such as channel/icon/log path).
 - Listed in the custom plugin index: <https://lizhijie429.github.io/dsh-task-notifier/index.json>.
 
@@ -229,7 +231,7 @@ Every field can be set in the profile patch `config:` block. Unset fields fall b
 
 **Delivery policy**: notifications are best-effort and asynchronous; failures never affect task execution. The queue is capped at 20 and drops by priority: `step`/`start` → `complete` → other terminals, with **approval/question alerts dropped last**. Progress toasts time out after 6 s and terminal ones after 12 s; a timed-out Windows toast is killed with `taskkill /T /F` (whole process tree).
 
-**Minimal child environment**: PowerShell / osascript / notify-send / reg.exe / taskkill inherit only PATH, SystemRoot/TEMP, HOME, DISPLAY/DBUS and LANG/LC_* — never the Host's provider credentials or tokens.
+**Minimal child environment**: PowerShell / osascript / notify-send / reg.exe / taskkill inherit only allowlisted desktop and locale plumbing — Windows: `SystemRoot`/`SystemDrive`/`windir`/`TEMP`/`TMP`/`USERPROFILE`/`HOMEDRIVE`/`HOMEPATH`/`APPDATA`/`LOCALAPPDATA`/`PATH`/`PSModulePath`/`PATHEXT`/`COMSPEC`/`PROCESSOR_ARCHITECTURE`/`USERNAME`; macOS: `HOME`/`PATH`/`TMPDIR`/`LANG`/`USER`/`SHELL`; Linux: `HOME`/`PATH`/`DISPLAY`/`WAYLAND_DISPLAY`/`DBUS_SESSION_BUS_ADDRESS`/`XDG_*`/`LANG`/`USER`/`SHELL`/`TMPDIR` (see `lib/child-env.mjs`). **No credential-bearing variable** (API key, token, proxy password) is on that allowlist, so no helper receives one.
 
 ## Known limitations
 
