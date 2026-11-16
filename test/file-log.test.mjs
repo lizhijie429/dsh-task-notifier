@@ -105,3 +105,40 @@ test('an unwritable target never throws', () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('keeps logging across several flush cycles and a rotation without disabling itself', () => {
+  const dir = tempDir()
+  try {
+    const path = join(dir, 'log.jsonl')
+    const warnings = []
+    const log = createFileLog({
+      config: { logFile: path },
+      logger: { warn: (message) => warnings.push(message) },
+      maxBytes: 600,
+    })
+    const events = []
+    // Six single-line batches of ~270 bytes each: the third grows the file past
+    // maxBytes, so the fourth flush rotates and the last two run after it.
+    for (let i = 1; i <= 6; i += 1) {
+      const event = `cycle-${i}`
+      events.push(event)
+      log(event, { pad: 'x'.repeat(200) })
+      log.flush()
+    }
+    // A writeBatch() that throws after appending still leaves the first batch on
+    // disk, so the disabled warning is the earliest evidence of the bug.
+    assert.deepEqual(warnings.filter((message) => message.includes('disabled')), [])
+    const current = readFileSync(path, 'utf8')
+    assert.ok(existsSync(`${path}.1`), 'the third batch must have triggered a rotation')
+    const rotated = readFileSync(`${path}.1`, 'utf8')
+    const written = `${rotated}${current}`
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line).event)
+    assert.deepEqual(written, events, 'every flushed line must reach the disk')
+    assert.match(current, /"event":"cycle-6"/, 'the log must keep working after the rotation')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
