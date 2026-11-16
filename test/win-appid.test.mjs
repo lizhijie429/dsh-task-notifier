@@ -99,7 +99,8 @@ test('registerWindowsAppId reports a failing reg.exe add without throwing', () =
 })
 
 test('registerWindowsAppId decodes OEM-code-page output without mangling the path', () => {
-  const gbk = Buffer.from([0xc0, 0xee, 0xd6, 0xbe, 0xbd, 0xdc])
+  // Synthetic, non-personal sample: GBK bytes for 测试用户 ("test user").
+  const gbk = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xd3, 0xc3, 0xbb, 0xa7])
   const result = registerWindowsAppId({
     platform: 'win32',
     appId: WINDOWS_APP_ID,
@@ -107,5 +108,5 @@ test('registerWindowsAppId decodes OEM-code-page output without mangling the pat
     spawnSyncFn: () => ({ status: 0, stdout: gbk, stderr: Buffer.alloc(0) }),
   })
   assert.equal(result.ok, true)
-  assert.ok(result.detail.includes('李志杰'), `detail=${result.detail}`)
+  assert.ok(result.detail.includes('测试用户'), `detail=${result.detail}`)
 })
